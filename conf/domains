@@ -1,0 +1,15 @@
+# Domain names! Put your domain names here!
+# Each line generates a new key and certificate.
+# The first domain on a line is the primary name in the certificate.
+# If multiple domains are on one line, they are added as extra names.
+
+# Always verify your config by running lematt.py --test first.
+# Run lematt.py --test after every change to verify your options still work.
+# The LE --prod rate limits are low and you can easily get locked out
+# of their system for a week if you try to test against production endpoints.
+
+# Examples:
+# example.com www
+# mail.example.com
+# dev.example.com dev2.example.com dev3.example.com
+# corp.example.com internal hr chat git web pikachu
