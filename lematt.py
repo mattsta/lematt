@@ -27,6 +27,7 @@ Brief (very brief) overview of acronyms and terms:
     - CRL: Certificate Revocation List - a way to check if certs are revoked
 """
 
+import multiprocessing
 import configparser
 import collections
 import subprocess
@@ -429,7 +430,7 @@ def unprepareDomainForUpdate(prepared):
 
 
 def generateKeysAndCertsAndRequestSignedCerts(
-        configuredDomains, domainActions):
+        configuredDomain, domainActions, keyType):
     # Now do the cert update (or cert generation, along with key generation) for
     # both RSA and EC keys:
     updatedCerts = {}
@@ -455,6 +456,7 @@ def generateKeysAndCertsAndRequestSignedCerts(
         else:
             domains = None
 
+        assert "." in domain, f"Domain ({domain}) isn't a domain name?"
         privateKey = customizeName("key", domain, "key", keyType)
         cert = customizeName("cert", domain, "cert-combined", keyType)
         csr = customizeName("csr", domain, "csr", keyType, "csr")
@@ -524,10 +526,10 @@ def generateKeysAndCertsAndRequestSignedCerts(
         else:
             updatedCerts[domain] = tuple([domain])
 
-    for domain in configuredDomains:
-        for keyType in ["rsa", "ec"]:
-            updateDomainForKeyType(domain, keyType)
-            log("")  # visually break with a newline between processed domains
+    assert keyType == "rsa" or keyType == "ec", f"Invalid keyType {keyType}!"
+
+    updateDomainForKeyType(configuredDomain, keyType)
+    log("")  # visually break with a newline between processed domains
 
     return updatedCerts
 
@@ -747,6 +749,13 @@ if __name__ == "__main__":
         action='store_true',
         help="Only produce output when changes happen.")
 
+    parser.add_argument(
+        '--parallel',
+        dest='concurrency',
+        default=1,
+        type=int,
+        help="Number of certificates to process in parallel")
+
     parser.add_argument('--config', dest='config', default="conf/lematt.conf",
                         help="Path to your lematt.conf - "
                         "config files 'domains' and 'actions.conf' "
@@ -756,6 +765,8 @@ if __name__ == "__main__":
 
     IS_CRON = args.isCron
     IS_TEST = args.isTest
+
+    concurrency = args.concurrency
 
     configBase = os.path.dirname(os.path.realpath(args.config))
 
@@ -812,6 +823,9 @@ if __name__ == "__main__":
 
     # See for updates:
     # https://letsencrypt.org/certificates/#intermediate-certificates
+    # Updates:
+    #  2021-03-27: x3 expires
+    #  2019-07-08: LE will provide certificates from their own root
     CROSSCHAIN_BASE = "https://letsencrypt.org/certs/"
     CROSSCHAIN_NAME_RSA = "lets-encrypt-x3-cross-signed.pem.txt"
 
@@ -860,12 +874,44 @@ if __name__ == "__main__":
     #     - generating CSRs for each {key,domains} pair when CSRs don't exist
     #     - run per-domain prepare actions when configured
     #   - adding updated domains to results for post-update action triggering
-    updatedCerts = generateKeysAndCertsAndRequestSignedCerts(
-        configuredDomains, domainActions)
+
+    # We now do massively parallel certificate updating where each Certificate
+    # for each domain gets processed with '--parallel' concurrency
+
+    # LE has per-second rate limits and we don't recover from those errors
+    # gracefully at the moment, so try to slow overzealous users down somewhat:
+    # ==================
+    # "The “new-reg”, “new-authz” and “new-cert” endpoints have an
+    # Overall Requests limit of 20 per second.
+    # The “/directory” endpoint and the “/acme” directory have an
+    # Overall Requests limit of 40 requests per second."
+    # ==================
+    if concurrency > 10:
+        concurrency = 10
+
+    with multiprocessing.Pool(processes=concurrency) as pool:
+        updatedCerts = pool.starmap(
+            generateKeysAndCertsAndRequestSignedCerts, itertools.product(
+                configuredDomains, [domainActions], [
+                    "rsa", "ec"]))
+
+    # sanity check from starmap
+    assert isinstance(updatedCerts, list)
+    assert len(updatedCerts) and isinstance(updatedCerts[0], dict)
+
+    # pool.starmap() returns a list of dicts, but our final
+    # result expects one dict with all results,
+    # so merge the nested dicts into one big dict.
+    updatedCertsSingleDict = {}
+    for u in updatedCerts:
+        updatedCertsSingleDict.update(u)
+
+    # sanity check
+    assert isinstance(updatedCertsSingleDict, dict)
 
     # Now deduplicate updated certs to action mappings then
     # copy keys, certs, and run configured update actions for updated certs
     updateKeysAndCertsAndServices(
         domainActions,
         domainActionNames,
-        updatedCerts)
+        updatedCertsSingleDict)
