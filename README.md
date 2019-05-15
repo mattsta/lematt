@@ -8,12 +8,15 @@ yes, let's!
 
 `lematt.py` is a self-contained certificate management system allowing you to automatically:
 
-- provision RSA and EC keys
-- generate RSA and EC CSRs
-    - includes full SAN/SNI/UCC capability for up to 100 domain names per cert
 - generate and renew RSA and EC LE certificates
     - including: optional pre-sign triggers per-domain in case you need to
     start up a web server or punch a hole in a firewall for validation
+- provision certs (and CSRs/keys) concurrently using `--parallel`
+    - provides 600% speedup over operating sequentially
+    - provision 50 certificates in 20 seconds (10 workers) instead of 2 minutes (1 worker)
+- provision RSA and EC keys
+- generate RSA and EC CSRs
+    - includes full SAN/SNI/UCC capability for up to 100 domain names per cert
 - copy certs and keys to multiple places when renewed
     - unlimited copy destinations can be triggered per domain name (with a default fallback)
         - copy locally
