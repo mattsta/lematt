@@ -463,7 +463,7 @@ def generateKeysAndCertsAndRequestSignedCerts(
             domains = deduplicatedSANs
             domain = "_".join(domains)  # "_" <-- eyelashes bot supreme
         else:
-            domains = None
+            domains = []
 
         assert "." in domain, f"Domain ({domain}) isn't a domain name?"
         privateKey = customizeName("key", domain, "key", keyType)
@@ -484,6 +484,21 @@ def generateKeysAndCertsAndRequestSignedCerts(
                     runAndWrite(
                         "openssl genrsa {}".format(KEYBITS_RSA),
                         privateKey, 0o600)
+
+                # also link the combined key into symlinks for each domain
+                # the key represents for easier configuration management...
+                for d in domains:
+                    singleDomainKey = customizeName("key", d, "key", keyType)
+
+                    # remove if exists, then we re-create immediately after
+                    try:
+                        os.unlink(singleDomainKey)
+                    except:
+                        pass
+
+                    keyNameOnly = os.path.basename(privateKey)
+                    log(f"Linking {keyNameOnly} to {singleDomainKey}", keyType, update=True)
+                    os.symlink(keyNameOnly, singleDomainKey)
 
         def generateCSR_():
             """ Either: use CSR if exists or create new if requested """
@@ -511,6 +526,28 @@ def generateKeysAndCertsAndRequestSignedCerts(
             prepared = prepareDomainForUpdate(domain)
 
         requestCert(csr, cert, IS_TEST)
+
+        # Also create individually named symlinks for each domain pointing
+        # back to the primary bundle where it originates.
+        # (makes adding/removing domains from SAN certs easier since each
+        #  addition or removal completely changes the combined cert name, which
+        #  then requires a full reconfig of everywhere they are used, but if we
+        #  use symlinks to the bundles, we can add/remove certs without reconfig)
+        for d in domains:
+            singleDomainCert = customizeName("cert", d, "cert-combined", keyType)
+
+            # remove if exists, then we re-create immediately after
+            try:
+                os.unlink(singleDomainCert)
+            except:
+                pass
+
+            certNameOnly = os.path.basename(cert)
+            log(f"Linking {certNameOnly} to {singleDomainCert}", keyType, update=True)
+            # symlink from single FILE IN DIR to SINGLE FILE IN DIR
+            # (i.e. don't smlink the full absolute path in lematt/conf/prod/cert/...)
+            os.symlink(certNameOnly, singleDomainCert)
+
         unprepareDomainForUpdate(prepared)
 
         # NOTE: if you have DUPLICATE certificates like a single
@@ -580,9 +617,9 @@ def updateKeysAndCertsAndServices(
         # N copies and N updates if we were processing all cert updates
         # individually.
         replaceCert = " ".join(
-            [f"{configBase}/{getSubdir('cert')}/{ud}*" for ud in firstDomains])
+            [f"{configBase}/{getSubdir('cert')}/{ud}*" for uds in updatedDomains for ud in uds])
         replaceKey = " ".join(
-            [f"{configBase}/{getSubdir('key')}/{ud}*" for ud in firstDomains])
+            [f"{configBase}/{getSubdir('key')}/{ud}*" for uds in updatedDomains for ud in uds])
 
         replaceDomainsCN = " ".join(firstDomains)
 
