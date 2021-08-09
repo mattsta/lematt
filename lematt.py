@@ -372,8 +372,12 @@ def requestCert(csr, outCert, isTest=False):
     # DNS API credentials then integrate with both DNS APIs themselves
     # (can easily adapt from other LE requesting systems) then
     # send acme dns-01 requests to LE too.
-    signedCert = acme_tiny.get_crt(ACCOUNT_KEY, csr, CHALLENGE_DIR,
-                                   directory_url=directory)
+    try:
+        signedCert = acme_tiny.get_crt(ACCOUNT_KEY, csr, CHALLENGE_DIR,
+                                       directory_url=directory)
+    except Exception as e:
+        print("FAILED FOR DOMAIN:", csr, "BECAUSE", e)
+        return
 
     if False and concurrency > 2:
         # Acme doesn't like too-aggressive attempts
