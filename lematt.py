@@ -82,7 +82,7 @@ def getSubdir(subdir):
 
 
 def loadDomainActions():
-    """ Read actions.conf and parse actions into usable dicts. """
+    """Read actions.conf and parse actions into usable dicts."""
     domainActions = {}
     domainActionNames = {}
     updaters = configparser.ConfigParser()
@@ -94,8 +94,8 @@ def loadDomainActions():
             actions[sectionName] = commands
 
     defaultOCSP = False
-    if 'ocspStapleRequired' in updaters['default']:
-        defaultOCSP = updaters['default']['ocspStapleRequired']
+    if "ocspStapleRequired" in updaters["default"]:
+        defaultOCSP = updaters["default"]["ocspStapleRequired"]
 
     def errIfIn(what, things, sect):
         if what in things:
@@ -103,42 +103,41 @@ def loadDomainActions():
             sys.exit(1)
 
     # Usage sanity check
-    for uda in ['default', 'every']:
+    for uda in ["default", "every"]:
         preActions = updaters[uda]
-        errIfIn('domains', preActions, uda)
+        errIfIn("domains", preActions, uda)
 
-        if uda == 'every':
-            errIfIn('ocspStapleRequired', preActions, uda)
+        if uda == "every":
+            errIfIn("ocspStapleRequired", preActions, uda)
 
     # Use ConfigParser magic to make a global dict 'default' for this key
     # so we don't have to guard "if val in dict" everywhere.
-    updaters['DEFAULT'] = {'ocspStapleRequired': defaultOCSP}
+    updaters["DEFAULT"] = {"ocspStapleRequired": defaultOCSP}
 
     # Use '.sections()' here because if we iterate 'updaters' directly,
     # we get the meta 'DEFAULT' key which we don't want to process.
     # '.sections()' only returns user-created sections.
     for uda in updaters.sections():
         preActions = updaters[uda]
-        actions = {'actionName': uda}
+        actions = {"actionName": uda}
         domainActionNames[uda] = actions
 
-        if not (uda == 'default' or uda == 'every'):
+        if not (uda == "default" or uda == "every"):
             # If not in the default section, get domains this override
             # should apply towards.
-            domains = preActions['domains'].split()
+            domains = preActions["domains"].split()
 
         # Extract override sections present (all optional)
-        extractAndPopulate('prepare', preActions, actions)
-        extractAndPopulate('update', preActions, actions)
-        extractAndPopulate('uploadCerts', preActions, actions)
-        extractAndPopulate('uploadKeys', preActions, actions)
+        extractAndPopulate("prepare", preActions, actions)
+        extractAndPopulate("update", preActions, actions)
+        extractAndPopulate("uploadCerts", preActions, actions)
+        extractAndPopulate("uploadKeys", preActions, actions)
 
         # Irrelevant for section 'every', but no harm done:
-        actions['ocspStapleRequired'] = preActions.getboolean(
-            'ocspStapleRequired')
+        actions["ocspStapleRequired"] = preActions.getboolean("ocspStapleRequired")
 
         # If default section, populate default domainActions
-        if uda == 'default' or uda == 'every':
+        if uda == "default" or uda == "every":
             domainActions[uda] = actions
         else:
             # else, attach actions to each domain inside this override
@@ -150,13 +149,13 @@ def loadDomainActions():
 
 
 def gendir(subname):
-    """ Create a directory hierarchy but don't complain if already exists """
+    """Create a directory hierarchy but don't complain if already exists"""
     adir = pathlib.Path("{}/{}".format(configBase, subname))
     adir.mkdir(parents=True, exist_ok=True)
 
 
 def run(thing, shell=False, output=True, stdinSend=None):
-    """ Run any string as a command (maybe as shell for env/expansion too) """
+    """Run any string as a command (maybe as shell for env/expansion too)"""
     log(f"Running: {thing}", "CMD", update=True)
     if stdinSend:
         # use 'repr' because we want to print the string with visible \n
@@ -182,7 +181,8 @@ def run(thing, shell=False, output=True, stdinSend=None):
         #       work fine in Python 3.6. Seems adding one line invaliding
         #       our entire current Python version is a bit extreme.
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE)
+        stderr=subprocess.PIPE,
+    )
 
 
 def runAsync(thing, shell=False):
@@ -200,20 +200,22 @@ def runAndWrite(thing, writeTo, perm=0o644, shell=False, stdinSend=None):
 
     # Python doesn't have a clean way of opening files with
     # pre-determined file permissions, so we get to do this instead...
-    with os.fdopen(os.open(writeTo, os.O_WRONLY | os.O_CREAT, perm), 'w') as w:
-        w.write(ran.stdout.decode('utf-8'))
+    with os.fdopen(os.open(writeTo, os.O_WRONLY | os.O_CREAT, perm), "w") as w:
+        w.write(ran.stdout.decode("utf-8"))
 
 
 def customizeName(subdir, name, subtype, enctype, ext="pem"):
     assert enctype == "rsa" or enctype == "ec"
 
-    return "{}/{}/{}-{}.{}{}.{}".format(configBase,
-                                        getSubdir(subdir),
-                                        name,
-                                        subtype,
-                                        RSA_TAG if enctype == "rsa" else CURVE_TAG,
-                                        ".test" if IS_TEST else "",
-                                        ext)
+    return "{}/{}/{}-{}.{}{}.{}".format(
+        configBase,
+        getSubdir(subdir),
+        name,
+        subtype,
+        RSA_TAG if enctype == "rsa" else CURVE_TAG,
+        ".test" if IS_TEST else "",
+        ext,
+    )
 
 
 def generateCSR(privateKey, domains, outfile):
@@ -222,9 +224,9 @@ def generateCSR(privateKey, domains, outfile):
     def needsOCSP():
         def required(domain):
             if domain in domainActions:
-                return domainActions[domain]['ocspStapleRequired']
+                return domainActions[domain]["ocspStapleRequired"]
 
-            return domainActions['default']['ocspStapleRequired']
+            return domainActions["default"]["ocspStapleRequired"]
 
         # do a quick loop to make sure all SAN domains have
         # the same 'ocspStapleRequired' value.
@@ -271,7 +273,8 @@ def generateCSR(privateKey, domains, outfile):
     # a human text representation of the CSR.
     runAndWrite(
         f"openssl req -new -sha256 -key {privateKey} -subj /CN={domain} "
-        f"{cmdSAN} -config -", outfile,
+        f"{cmdSAN} -config -",
+        outfile,
         stdinSend=f"""[req]
 distinguished_name=req_dn
 
@@ -283,7 +286,8 @@ keyUsage=nonRepudiation,digitalSignature,keyEncipherment
 {ocspRequired}
 
 [SAN]
-subjectAltName={subjectAltNames}""")
+subjectAltName={subjectAltNames}""",
+    )
 
 
 def generateCSRSingleDomain(privateKey, domain, outfile):
@@ -298,7 +302,7 @@ def generateCSRWithSAN(privateKey, domains, outfile):
 
 # unused, but may be useful in the future
 def certFromNetwork(hostname):
-    """ Get cert expiration against a live server """
+    """Get cert expiration against a live server"""
     context = ssl.create_default_context()
     conn = context.wrap_socket(
         socket.socket(socket.AF_INET),
@@ -316,7 +320,7 @@ def certFromNetwork(hostname):
 
 
 def certFromFile(certPath):
-    """ Get cert expiration from local file """
+    """Get cert expiration from local file"""
     # If cert doesn't exist, it must be requested...
     certExists = os.path.isfile(certPath)
     if not certExists:
@@ -351,10 +355,9 @@ def certNeedsRenewal(certDetails, utcnow):
         return False
 
     # Future - Past (now), ideally
-    ssl_date_fmt = r'%b %d %H:%M:%S %Y %Z'
+    ssl_date_fmt = r"%b %d %H:%M:%S %Y %Z"
 
-    expirationAsDate = datetime.datetime.strptime(
-        certDetails['notAfter'], ssl_date_fmt)
+    expirationAsDate = datetime.datetime.strptime(certDetails["notAfter"], ssl_date_fmt)
 
     return needsRenewNow(expirationAsDate)
 
@@ -373,8 +376,9 @@ def requestCert(csr, outCert, isTest=False):
     # (can easily adapt from other LE requesting systems) then
     # send acme dns-01 requests to LE too.
     try:
-        signedCert = acme_tiny.get_crt(ACCOUNT_KEY, csr, CHALLENGE_DIR,
-                                       directory_url=directory)
+        signedCert = acme_tiny.get_crt(
+            ACCOUNT_KEY, csr, CHALLENGE_DIR, directory_url=directory
+        )
     except Exception as e:
         print("FAILED FOR DOMAIN:", csr, "BECAUSE", e)
         return
@@ -383,7 +387,7 @@ def requestCert(csr, outCert, isTest=False):
         # Acme doesn't like too-aggressive attempts
         time.sleep(0.5)
 
-    with open(outCert, 'w') as writeMe:
+    with open(outCert, "w") as writeMe:
         writeMe.write(signedCert)
 
 
@@ -391,21 +395,21 @@ def prepareDomainForUpdate(domain):
     if domain in domainActions:
         actions = domainActions[domain]
     else:
-        actions = domainActions['default']
+        actions = domainActions["default"]
 
-    if 'every' in domainActions:
-        allActions = domainActions['every']
+    if "every" in domainActions:
+        allActions = domainActions["every"]
     else:
         allActions = []
 
     def prepare(acts):
-        return [runAsync(X.replace('DOMAIN', domain)) for X in acts['prepare']]
+        return [runAsync(X.replace("DOMAIN", domain)) for X in acts["prepare"]]
 
     prepared = []
-    if 'prepare' in actions:
+    if "prepare" in actions:
         prepared.extend(prepare(actions))
 
-    if 'prepare' in allActions:
+    if "prepare" in allActions:
         prepared.extend(prepare(allActions))
 
     return prepared
@@ -438,8 +442,7 @@ def unprepareDomainForUpdate(prepared):
             pass
 
 
-def generateKeysAndCertsAndRequestSignedCerts(
-        configuredDomain, domainActions, keyType):
+def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, keyType):
     # Now do the cert update (or cert generation, along with key generation) for
     # both RSA and EC keys:
     updatedCerts = {}
@@ -472,18 +475,20 @@ def generateKeysAndCertsAndRequestSignedCerts(
         isEC = keyType == "ec"
 
         def generateKey():
-            """ Either: use key if exists or create new if requested """
+            """Either: use key if exists or create new if requested"""
             if ALWAYS_NEW_KEYS or not os.path.isfile(privateKey):
                 if isEC:
                     log(f"Generating EC {CURVE} key...", keyType)
                     runAndWrite(
                         "openssl ecparam -genkey -name {}".format(CURVE),
-                        privateKey, 0o600)
+                        privateKey,
+                        0o600,
+                    )
                 else:
                     log(f"Generating RSA {KEYBITS_RSA} key...", keyType)
                     runAndWrite(
-                        "openssl genrsa {}".format(KEYBITS_RSA),
-                        privateKey, 0o600)
+                        "openssl genrsa {}".format(KEYBITS_RSA), privateKey, 0o600
+                    )
 
                 # also link the combined key into symlinks for each domain
                 # the key represents for easier configuration management...
@@ -497,11 +502,15 @@ def generateKeysAndCertsAndRequestSignedCerts(
                         pass
 
                     keyNameOnly = os.path.basename(privateKey)
-                    log(f"Linking {keyNameOnly} to {singleDomainKey}", keyType, update=True)
+                    log(
+                        f"Linking {keyNameOnly} to {singleDomainKey}",
+                        keyType,
+                        update=True,
+                    )
                     os.symlink(keyNameOnly, singleDomainKey)
 
         def generateCSR_():
-            """ Either: use CSR if exists or create new if requested """
+            """Either: use CSR if exists or create new if requested"""
             if ALWAYS_NEW_KEYS or not os.path.isfile(csr):
                 log("Generating CSR...", keyType)
                 if domains:
@@ -584,7 +593,7 @@ def sortByDomain(x):
     # Sort domain names by their top-down sort order, but ignore actual TLD.
     # e.g. mail.hello.there.com will get a sort tuple of:
     #      (there hello mail)
-    parts = x.split('.')
+    parts = x.split(".")
     parts.reverse()
     return tuple(parts[1:])
 
@@ -593,10 +602,7 @@ def sortByDomain(x):
 # 'domainActionNames' is a map of action names -> action description maps
 # action maps have element 'actionName' to map domainActions->domainNameActions
 # for deduplicating final cert/key copying and update actions.
-def updateKeysAndCertsAndServices(
-        domainActions,
-        domainActionNames,
-        updatedCerts):
+def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts):
 
     # No updated certs? No need to update anything!
     if not updatedCerts:
@@ -617,9 +623,19 @@ def updateKeysAndCertsAndServices(
         # N copies and N updates if we were processing all cert updates
         # individually.
         replaceCert = " ".join(
-            [f"{configBase}/{getSubdir('cert')}/{ud}*" for uds in updatedDomains for ud in uds])
+            [
+                f"{configBase}/{getSubdir('cert')}/{ud}*"
+                for uds in updatedDomains
+                for ud in uds
+            ]
+        )
         replaceKey = " ".join(
-            [f"{configBase}/{getSubdir('key')}/{ud}*" for uds in updatedDomains for ud in uds])
+            [
+                f"{configBase}/{getSubdir('key')}/{ud}*"
+                for uds in updatedDomains
+                for ud in uds
+            ]
+        )
 
         replaceDomainsCN = " ".join(firstDomains)
 
@@ -645,26 +661,27 @@ def updateKeysAndCertsAndServices(
             totalDomainsSANDescribed.append(place)
 
         updatedFormatted = ", ".join(totalDomainsSANDescribed)
-        log("Executing "
-            f"[{actions['actionName']}] for {updatedFormatted}",
+        log(
+            "Executing " f"[{actions['actionName']}] for {updatedFormatted}",
             "action",
-            update=True)
+            update=True,
+        )
 
         # Do we have upload cert overrides?
-        if 'uploadCerts' in actions:
-            for upload in actions['uploadCerts']:
-                run(upload.replace('CERTS', replaceCert), shell=True)
+        if "uploadCerts" in actions:
+            for upload in actions["uploadCerts"]:
+                run(upload.replace("CERTS", replaceCert), shell=True)
 
         # Do we have upload key overrides?
-        if 'uploadKeys' in actions:
-            for upload in actions['uploadKeys']:
-                run(upload.replace('KEYS', replaceKey), shell=True)
+        if "uploadKeys" in actions:
+            for upload in actions["uploadKeys"]:
+                run(upload.replace("KEYS", replaceKey), shell=True)
 
         # Now with certs/keys replaced, run full service update:
-        if 'update' in actions:
-            for action in actions['update']:
-                action = action.replace('DOMAINS_CN', replaceDomainsCN)
-                action = action.replace('DOMAINS_ALL', replaceDomainsALL)
+        if "update" in actions:
+            for action in actions["update"]:
+                action = action.replace("DOMAINS_CN", replaceDomainsCN)
+                action = action.replace("DOMAINS_ALL", replaceDomainsALL)
                 run(action, shell=True)
 
     # 'combinedProcessingResult' is a map of:
@@ -679,7 +696,7 @@ def updateKeysAndCertsAndServices(
     # print(updatedCerts)
 
     # Do we have 'every' actions for post-processing?
-    hasGlobalEveryActionGroup = 'every' in domainActionNames
+    hasGlobalEveryActionGroup = "every" in domainActionNames
 
     for updatedDomain, domainsOnCert in updatedCerts.items():
         # Step 1: Lookup domain in map of DOMAIN->Actions
@@ -698,18 +715,17 @@ def updateKeysAndCertsAndServices(
         # If this domain has an explicit override:
         if updatedDomain in domainActions:
             actions = domainActions[updatedDomain]
-            actionName = actions['actionName']
+            actionName = actions["actionName"]
             combinedProcessingResult[actionName].add(domainsOnCert)
         else:  # else, no override, so use default action!
-            combinedProcessingResult['default'].add(domainsOnCert)
+            combinedProcessingResult["default"].add(domainsOnCert)
 
         if hasGlobalEveryActionGroup:
-            combinedProcessingResult['every'].add(domainsOnCert)
+            combinedProcessingResult["every"].add(domainsOnCert)
 
     # Now run deduplicated domain actions for uploads and service updates:
     if combinedProcessingResult:
-        log("Copying keys and certs then reloading services...",
-            "action", update=True)
+        log("Copying keys and certs then reloading services...", "action", update=True)
 
     # print(combinedProcessingResult)
     for sectionName, sectionDomains in combinedProcessingResult.items():
@@ -726,7 +742,7 @@ def loadDomains():
     # e.g. "mydomain.com www" will generate a certificate with
     # domains: mydomain.com and www.mydomain.com
     configuredDomains = []
-    with open(f"{configBase}/domains", 'r') as doms:
+    with open(f"{configBase}/domains", "r") as doms:
         for line in doms:
             # Skip commented out or blank lines
             if line.startswith("#") or line.startswith("\n"):
@@ -742,7 +758,8 @@ def loadDomains():
             if len(domainsOnLine) > 100:
                 print(
                     f"Error! The domain limit is 100 per certificate, but you "
-                    "configured {len(domainsOnLine)} domains:\n{domainsOnLine}")
+                    "configured {len(domainsOnLine)} domains:\n{domainsOnLine}"
+                )
                 sys.exit(1)
 
             # If only one domain, present as a string, _not_ a list,
@@ -755,7 +772,7 @@ def loadDomains():
                     # you can use subdomains as shorthand by just giving their
                     # name and we take care of appending the first
                     # domain on the line to your subdomain
-                    if '.' not in domain:
+                    if "." not in domain:
                         domainsOnLine[i] = f"{domain}.{firstDomain}"
 
             configuredDomains.append(domainsOnLine)
@@ -767,45 +784,52 @@ if __name__ == "__main__":
     # Rate limits described at:
     # Testing / Staging: https://letsencrypt.org/docs/staging-environment/
     #        Production: https://letsencrypt.org/docs/rate-limits/
-    parser = argparse.ArgumentParser(
-        description="Matt's Let's Encrypt Automation")
+    parser = argparse.ArgumentParser(description="Matt's Let's Encrypt Automation")
 
     # production-xor-staging/testing
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
-        '--prod',
-        dest='isTest',
-        action='store_false',
+        "--prod",
+        dest="isTest",
+        action="store_false",
         help="Use LE production endpoint. "
-        "Production rate limit is 5 duplicate certs per domain per week.")
+        "Production rate limit is 5 duplicate certs per domain per week.",
+    )
 
     group.add_argument(
-        '--test',
-        dest='isTest',
-        action='store_true',
+        "--test",
+        dest="isTest",
+        action="store_true",
         help="""Use LE staging endpoint.
         Keys and certs will have 'test' in filenames.
         Don't waste your production rate limits during testing.
         Staging rate limit is 30,000 cert requests per week and
-        30,000 duplicate cert issuance per week (per domain).""")
+        30,000 duplicate cert issuance per week (per domain).""",
+    )
 
     parser.add_argument(
-        '--cron',
-        dest='isCron',
-        action='store_true',
-        help="Only produce output when changes happen.")
+        "--cron",
+        dest="isCron",
+        action="store_true",
+        help="Only produce output when changes happen.",
+    )
 
     parser.add_argument(
-        '--parallel',
-        dest='concurrency',
+        "--parallel",
+        dest="concurrency",
         default=1,
         type=int,
-        help="Number of certificates to process in parallel")
+        help="Number of certificates to process in parallel",
+    )
 
-    parser.add_argument('--config', dest='config', default="conf/lematt.conf",
-                        help="Path to your lematt.conf - "
-                        "config files 'domains' and 'actions.conf' "
-                        "must be in the same directory as lematt.conf")
+    parser.add_argument(
+        "--config",
+        dest="config",
+        default="conf/lematt.conf",
+        help="Path to your lematt.conf - "
+        "config files 'domains' and 'actions.conf' "
+        "must be in the same directory as lematt.conf",
+    )
 
     args = parser.parse_args()
 
@@ -817,11 +841,13 @@ if __name__ == "__main__":
     configBase = os.path.dirname(os.path.realpath(args.config))
 
     conf = configparser.ConfigParser()
-    conf['DEFAULT'] = {'reauthorizeDays': 15,
-                       'keyBitsRSA': '2048',
-                       'alwaysGenerateNewKeys': 'no',
-                       'generateNewCertsAfterDays': 0,
-                       'curve': 'prime256v1'}
+    conf["DEFAULT"] = {
+        "reauthorizeDays": 15,
+        "keyBitsRSA": "2048",
+        "alwaysGenerateNewKeys": "no",
+        "generateNewCertsAfterDays": 0,
+        "curve": "prime256v1",
+    }
 
     if not conf.read(args.config):
         print(f"Requested config path not found: {args.config}")
@@ -831,14 +857,14 @@ if __name__ == "__main__":
 
     # We treat these as globals throughout the code, so they must
     # be initialized here outside of any functions:
-    reauthDays = float(config['reauthorizeDays'])
+    reauthDays = float(config["reauthorizeDays"])
     REAUTHORIZE_DAYS_IN_ADVANCE = timedelta(days=reauthDays)
-    CHALLENGE_DIR = config['challengeDropDir']
-    ACCOUNT_KEY = config['accountKey']
-    KEYBITS_RSA = config['keyBitsRSA']
-    CURVE = config['curve']
-    ALWAYS_NEW_KEYS = config.getboolean('alwaysGenerateNewKeys')
-    GENERATE_CERTS_DAYS = float(config['generateNewCertsAfterDays'])
+    CHALLENGE_DIR = config["challengeDropDir"]
+    ACCOUNT_KEY = config["accountKey"]
+    KEYBITS_RSA = config["keyBitsRSA"]
+    CURVE = config["curve"]
+    ALWAYS_NEW_KEYS = config.getboolean("alwaysGenerateNewKeys")
+    GENERATE_CERTS_DAYS = float(config["generateNewCertsAfterDays"])
 
     if GENERATE_CERTS_DAYS:  # <-- if !0
         # Instead of days-before-expire, use days-since-issue math.
@@ -855,8 +881,9 @@ if __name__ == "__main__":
         # timedelta(days=90) - timedelta(days=3.5)
         # (actually it's the same as timedelta(days=86.5), but the
         #  mathy way looks cleaner and can be adjusted easier)
-        REAUTHORIZE_DAYS_IN_ADVANCE = timedelta(days=90) - \
-            timedelta(days=GENERATE_CERTS_DAYS)
+        REAUTHORIZE_DAYS_IN_ADVANCE = timedelta(days=90) - timedelta(
+            days=GENERATE_CERTS_DAYS
+        )
 
     # Use old configparser .get() syntax because defaults are based on values
     RSA_TAG = config.get("rsaTag", f"rsa{KEYBITS_RSA}")
@@ -877,8 +904,7 @@ if __name__ == "__main__":
 
     # TODO: turn this into a map of CHAIN = {'rsa': CHAIN_RSA, 'ec': CHAIN_EC}
     # LE plans a full ECDSA cert chain in Q3 2018
-    CHAIN_RSA = "{}/{}".format(configBase,
-                               CROSSCHAIN_NAME_RSA).replace(".txt", "")
+    CHAIN_RSA = "{}/{}".format(configBase, CROSSCHAIN_NAME_RSA).replace(".txt", "")
 
     # LE actually returns a chained cert, so we don't have to manually apply
     # the cross chain ourself, but the cross chain is useful for configuring
@@ -903,9 +929,10 @@ if __name__ == "__main__":
 
     # Fetch intermediate cert so user can copy it elsewhere if needed
     if not os.path.isfile(CHAIN_RSA):
-        run("wget -O{} {}{}".format(CHAIN_RSA,
-                                    CROSSCHAIN_BASE, CROSSCHAIN_NAME_RSA),
-            output=False)
+        run(
+            "wget -O{} {}{}".format(CHAIN_RSA, CROSSCHAIN_BASE, CROSSCHAIN_NAME_RSA),
+            output=False,
+        )
 
     # Create directories to store results (if they don't already exist)
     for name in ["key", "cert", "csr"]:
@@ -937,9 +964,9 @@ if __name__ == "__main__":
 
     with multiprocessing.Pool(processes=concurrency) as pool:
         updatedCerts = pool.starmap(
-            generateKeysAndCertsAndRequestSignedCerts, itertools.product(
-                configuredDomains, [domainActions], [
-                    "rsa", "ec"]))
+            generateKeysAndCertsAndRequestSignedCerts,
+            itertools.product(configuredDomains, [domainActions], ["rsa", "ec"]),
+        )
 
     # sanity check from starmap
     assert isinstance(updatedCerts, list)
@@ -958,6 +985,5 @@ if __name__ == "__main__":
     # Now deduplicate updated certs to action mappings then
     # copy keys, certs, and run configured update actions for updated certs
     updateKeysAndCertsAndServices(
-        domainActions,
-        domainActionNames,
-        updatedCertsSingleDict)
+        domainActions, domainActionNames, updatedCertsSingleDict
+    )
