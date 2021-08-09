@@ -37,6 +37,7 @@ import datetime
 import pathlib
 import socket
 import json
+import time
 import ssl
 import sys
 import os
@@ -373,6 +374,10 @@ def requestCert(csr, outCert, isTest=False):
     # send acme dns-01 requests to LE too.
     signedCert = acme_tiny.get_crt(ACCOUNT_KEY, csr, CHALLENGE_DIR,
                                    directory_url=directory)
+
+    if False and concurrency > 2:
+        # Acme doesn't like too-aggressive attempts
+        time.sleep(0.5)
 
     with open(outCert, 'w') as writeMe:
         writeMe.write(signedCert)
