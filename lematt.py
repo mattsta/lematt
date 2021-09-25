@@ -490,24 +490,24 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
                         "openssl genrsa {}".format(KEYBITS_RSA), privateKey, 0o600
                     )
 
-                # also link the combined key into symlinks for each domain
-                # the key represents for easier configuration management...
-                for d in domains:
-                    singleDomainKey = customizeName("key", d, "key", keyType)
+            # also link the combined key into symlinks for each domain
+            # the key represents for easier configuration management...
+            for d in domains:
+                singleDomainKey = customizeName("key", d, "key", keyType)
 
-                    # remove if exists, then we re-create immediately after
-                    try:
-                        os.unlink(singleDomainKey)
-                    except:
-                        pass
+                # remove if exists, then we re-create immediately after
+                try:
+                    os.unlink(singleDomainKey)
+                except:
+                    pass
 
-                    keyNameOnly = os.path.basename(privateKey)
-                    log(
-                        f"Linking {keyNameOnly} to {singleDomainKey}",
-                        keyType,
-                        update=True,
-                    )
-                    os.symlink(keyNameOnly, singleDomainKey)
+                keyNameOnly = os.path.basename(privateKey)
+                log(
+                    f"Linking {keyNameOnly} to {singleDomainKey}",
+                    keyType,
+                    update=True,
+                )
+                os.symlink(keyNameOnly, singleDomainKey)
 
         def generateCSR_():
             """Either: use CSR if exists or create new if requested"""
