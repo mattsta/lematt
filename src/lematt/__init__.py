@@ -64,6 +64,52 @@ from lematt.systemd import (
     SystemdInstaller,
 )
 
+# UI/Display components
+from lematt.display import (
+    DisplayConfig,
+    StatusStyle,
+    console,
+    create_action_table,
+    create_certificate_table,
+    create_config_tree,
+    create_domain_tree,
+    create_health_summary,
+    create_renewal_progress,
+    print_banner,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+)
+from lematt.dashboard import (
+    Dashboard,
+    DashboardConfig,
+    DashboardState,
+    DashboardView,
+    create_simple_dashboard,
+    print_dashboard_snapshot,
+)
+from lematt.help import (
+    HELP_TOPICS,
+    HelpCategory,
+    HelpRenderer,
+    HelpSystem,
+    HelpTopic,
+    get_quick_help,
+    print_help,
+    search_help,
+)
+from lematt.reports import (
+    CertificateInventoryItem,
+    RenewalScheduleItem,
+    Report,
+    ReportConfig,
+    ReportGenerator,
+    ReportRenderer,
+    generate_full_report,
+    generate_quick_report,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -112,4 +158,44 @@ __all__ = [
     "SystemdConfig",
     "SystemdInstaller",
     "SYSTEMD_PRESETS",
+    # Display components
+    "console",
+    "DisplayConfig",
+    "StatusStyle",
+    "create_certificate_table",
+    "create_health_summary",
+    "create_domain_tree",
+    "create_config_tree",
+    "create_renewal_progress",
+    "create_action_table",
+    "print_banner",
+    "print_success",
+    "print_warning",
+    "print_error",
+    "print_info",
+    # Dashboard
+    "Dashboard",
+    "DashboardConfig",
+    "DashboardState",
+    "DashboardView",
+    "create_simple_dashboard",
+    "print_dashboard_snapshot",
+    # Help system
+    "HelpSystem",
+    "HelpTopic",
+    "HelpCategory",
+    "HelpRenderer",
+    "HELP_TOPICS",
+    "print_help",
+    "search_help",
+    "get_quick_help",
+    # Reports
+    "Report",
+    "ReportConfig",
+    "ReportGenerator",
+    "ReportRenderer",
+    "CertificateInventoryItem",
+    "RenewalScheduleItem",
+    "generate_full_report",
+    "generate_quick_report",
 ]

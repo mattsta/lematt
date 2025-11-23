@@ -25,6 +25,7 @@ classifiers = [
 # Required dependencies (tomllib is stdlib in Python 3.11+)
 dependencies = [
     "loguru>=0.7",  # Modern structured logging
+    "rich>=13.0",   # Beautiful terminal output, tables, progress bars
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,11 @@ dev = [
     "pytest-cov>=4.0",
     "mypy>=1.0",
     "ruff>=0.1",
+]
+
+# Full installation with all features
+full = [
+    "cryptography>=3.4",
 ]
 
 [project.scripts]
