@@ -207,24 +207,25 @@ class CertificateExecutor:
     rate_limit: float = 10.0
     progress_callback: Callable[[BatchProgress], None] | None = None
 
-    # Internal state (initialized in __post_init__)
+    # Internal state with clean defaults
+    progress: BatchProgress = field(default_factory=BatchProgress)
+    _shutdown_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    _original_sigint: signal.Handlers | None = field(default=None, repr=False)
+    _original_sigterm: signal.Handlers | None = field(default=None, repr=False)
+
+    # Computed fields (require __post_init__)
     rate_limiter: RateLimiter = field(init=False, repr=False)
-    progress: BatchProgress = field(init=False)
-    _shutdown_event: threading.Event = field(init=False, repr=False)
-    _original_sigint: signal.Handlers | None = field(default=None, init=False, repr=False)
-    _original_sigterm: signal.Handlers | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Initialize internal state after dataclass creation."""
-        # Compute max_workers with hard cap at 10
+        """Initialize computed fields after dataclass creation."""
+        # Cap max_workers at 10
         if self.max_workers is None:
             self.max_workers = min(self.config.concurrency, 10)
         else:
             self.max_workers = min(self.max_workers, 10)
 
+        # Create rate limiter with configured rate
         self.rate_limiter = RateLimiter(rate=self.rate_limit)
-        self.progress = BatchProgress()
-        self._shutdown_event = threading.Event()
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
