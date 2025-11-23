@@ -11,6 +11,7 @@ import itertools
 import json
 import shlex
 import subprocess
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
+@dataclass
 class ActionRunner:
     """Handles execution of pre/post certificate actions.
 
@@ -29,16 +31,10 @@ class ActionRunner:
     upload and update commands.
     """
 
-    def __init__(self, config: LemattConfig) -> None:
-        """Initialize the action runner.
-
-        Args:
-            config: The lematt configuration object.
-        """
-        self.config = config
-        self.domain_actions: dict[str, dict] = {}
-        self.domain_action_names: dict[str, dict] = {}
-        self._prepare_processes: list[subprocess.Popen] = []
+    config: LemattConfig
+    domain_actions: dict[str, dict] = field(default_factory=dict)
+    domain_action_names: dict[str, dict] = field(default_factory=dict)
+    _prepare_processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
 
     def log(self, message: str, mode: str = "", update: bool = False) -> None:
         """Log a message with optional mode prefix."""

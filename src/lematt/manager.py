@@ -11,6 +11,7 @@ import pathlib
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,7 @@ class CertificateRequestError(Exception):
     """Raised when certificate request fails after all retries."""
 
 
+@dataclass
 class PrepareActionRunner:
     """Handles prepare actions that must run before certificate requests.
 
@@ -40,9 +42,8 @@ class PrepareActionRunner:
     that must be kept alive during the ACME challenge and killed afterward.
     """
 
-    def __init__(self, config: LemattConfig) -> None:
-        self.config = config
-        self._processes: list[subprocess.Popen] = []
+    config: LemattConfig
+    _processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
 
     def prepare_domain(self, domain: str, domain_actions: dict) -> list[subprocess.Popen]:
         """Run prepare actions for a domain before cert request.
@@ -112,6 +113,7 @@ class PrepareActionRunner:
             self._processes = []
 
 
+@dataclass
 class CertificateManager:
     """Manages certificate generation, renewal, and deployment.
 
@@ -119,14 +121,8 @@ class CertificateManager:
     global state by accepting configuration through __init__.
     """
 
-    def __init__(self, config: LemattConfig) -> None:
-        """Initialize the certificate manager.
-
-        Args:
-            config: The lematt configuration object.
-        """
-        self.config = config
-        self._acme_module: object | None = None
+    config: LemattConfig
+    _acme_module: object | None = field(default=None, repr=False)
 
     @property
     def acme(self) -> object:

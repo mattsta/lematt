@@ -84,6 +84,7 @@ class BatchProgress:
                     self.cancelled += 1
 
 
+@dataclass
 class RateLimiter:
     """Token bucket rate limiter for API requests.
 
@@ -93,16 +94,16 @@ class RateLimiter:
     - 5 duplicate certificates per week
     """
 
-    def __init__(
-        self,
-        requests_per_second: float = 10.0,  # Conservative default
-        burst_size: int = 5,
-    ) -> None:
-        self.rate = requests_per_second
-        self.burst_size = burst_size
-        self.tokens = float(burst_size)
+    rate: float = 10.0  # requests per second (conservative default)
+    burst_size: int = 5
+    tokens: float = field(init=False)
+    last_update: float = field(init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def __post_init__(self) -> None:
+        """Initialize mutable state after dataclass creation."""
+        self.tokens = float(self.burst_size)
         self.last_update = time.monotonic()
-        self._lock = threading.Lock()
 
     def acquire(self, timeout: float = 30.0) -> bool:
         """Acquire a token, blocking until available or timeout."""
@@ -189,6 +190,7 @@ def _process_certificate_worker(
         }
 
 
+@dataclass
 class CertificateExecutor:
     """Robust concurrent executor for certificate operations.
 
@@ -200,29 +202,29 @@ class CertificateExecutor:
     - Memory efficient: Processes results as they complete
     """
 
-    def __init__(
-        self,
-        config: LemattConfig,
-        max_workers: int | None = None,
-        rate_limit: float = 10.0,
-        progress_callback: Callable[[BatchProgress], None] | None = None,
-    ) -> None:
-        """Initialize the executor.
+    config: LemattConfig
+    max_workers: int | None = None
+    rate_limit: float = 10.0
+    progress_callback: Callable[[BatchProgress], None] | None = None
 
-        Args:
-            config: The lematt configuration.
-            max_workers: Maximum concurrent workers (default: config.concurrency).
-            rate_limit: Maximum requests per second (default: 10).
-            progress_callback: Optional callback for progress updates.
-        """
-        self.config = config
-        self.max_workers = min(max_workers or config.concurrency, 10)  # Hard cap at 10
-        self.rate_limiter = RateLimiter(requests_per_second=rate_limit)
-        self.progress_callback = progress_callback
+    # Internal state (initialized in __post_init__)
+    rate_limiter: RateLimiter = field(init=False, repr=False)
+    progress: BatchProgress = field(init=False)
+    _shutdown_event: threading.Event = field(init=False, repr=False)
+    _original_sigint: signal.Handlers | None = field(default=None, init=False, repr=False)
+    _original_sigterm: signal.Handlers | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Initialize internal state after dataclass creation."""
+        # Compute max_workers with hard cap at 10
+        if self.max_workers is None:
+            self.max_workers = min(self.config.concurrency, 10)
+        else:
+            self.max_workers = min(self.max_workers, 10)
+
+        self.rate_limiter = RateLimiter(rate=self.rate_limit)
         self.progress = BatchProgress()
         self._shutdown_event = threading.Event()
-        self._original_sigint: signal.Handlers | None = None
-        self._original_sigterm: signal.Handlers | None = None
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
