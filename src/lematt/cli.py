@@ -9,6 +9,7 @@ import configparser
 import json
 import os
 import sys
+from pathlib import Path
 
 from loguru import logger
 
@@ -273,6 +274,90 @@ def main() -> int:
         help="Create example lematt.toml configuration file and exit",
     )
 
+    # Systemd management
+    systemd_group = parser.add_argument_group("systemd automation")
+    systemd_group.add_argument(
+        "--install-systemd",
+        dest="install_systemd",
+        action="store_true",
+        help="Install systemd timer and service for automated renewals",
+    )
+    systemd_group.add_argument(
+        "--uninstall-systemd",
+        dest="uninstall_systemd",
+        action="store_true",
+        help="Remove systemd timer and service",
+    )
+    systemd_group.add_argument(
+        "--systemd-status",
+        dest="systemd_status",
+        action="store_true",
+        help="Show status of systemd timer",
+    )
+    systemd_group.add_argument(
+        "--systemd-preset",
+        dest="systemd_preset",
+        choices=["default", "aggressive", "conservative", "weekly"],
+        default="default",
+        help="Systemd timer schedule preset (default: twice daily)",
+    )
+
+    # Health check and monitoring
+    health_group = parser.add_argument_group("health checks and monitoring")
+    health_group.add_argument(
+        "--health-check",
+        dest="health_check",
+        action="store_true",
+        help="Run health check on all certificates",
+    )
+    health_group.add_argument(
+        "--check-live",
+        dest="check_live",
+        action="store_true",
+        help="Check live certificates served by domains (with --health-check)",
+    )
+    health_group.add_argument(
+        "--warning-days",
+        dest="warning_days",
+        type=int,
+        default=14,
+        help="Days before expiry to warn (default: 14)",
+    )
+    health_group.add_argument(
+        "--critical-days",
+        dest="critical_days",
+        type=int,
+        default=7,
+        help="Days before expiry for critical alert (default: 7)",
+    )
+    health_group.add_argument(
+        "--prometheus",
+        dest="prometheus_output",
+        action="store_true",
+        help="Output health check as Prometheus metrics",
+    )
+    health_group.add_argument(
+        "--write-health",
+        dest="write_health",
+        metavar="PATH",
+        help="Write health status to file (for monitoring)",
+    )
+
+    # Notification configuration
+    notify_group = parser.add_argument_group("notifications")
+    notify_group.add_argument(
+        "--init-notifications",
+        dest="init_notifications",
+        action="store_true",
+        help="Create example notification configuration file",
+    )
+    notify_group.add_argument(
+        "--test-notification",
+        dest="test_notification",
+        action="store_true",
+        help="Send a test notification to verify configuration",
+    )
+
     args = parser.parse_args()
 
     # Set up logging
@@ -280,8 +365,6 @@ def main() -> int:
 
     # Handle --init-toml: create example config and exit
     if args.init_toml:
-        from pathlib import Path
-
         from lematt.config_loader import create_example_toml
 
         config_dir = Path(os.path.dirname(os.path.realpath(args.config)))
@@ -292,6 +375,85 @@ def main() -> int:
         create_example_toml(toml_path)
         logger.info("Edit the file and customize for your environment")
         return 0
+
+    # Handle --init-notifications: create notification config
+    if args.init_notifications:
+        from lematt.systemd import generate_notify_config
+
+        notify_path = Path("/etc/lematt/notify.conf")
+        if notify_path.exists():
+            logger.error(f"Notification config already exists: {notify_path}")
+            return 1
+        try:
+            notify_path.parent.mkdir(parents=True, exist_ok=True)
+            notify_path.write_text(generate_notify_config())
+            logger.info(f"Created notification config: {notify_path}")
+            logger.info("Edit the file to configure your notification backends")
+        except PermissionError:
+            logger.error(f"Permission denied writing {notify_path} - run as root")
+            return 1
+        return 0
+
+    # Handle systemd commands (don't need full config)
+    if args.install_systemd or args.uninstall_systemd or args.systemd_status:
+        from lematt.systemd import PRESETS, SystemdConfig, SystemdInstaller
+
+        config_path = os.path.realpath(args.config)
+
+        # Get preset or use default
+        preset_config = PRESETS.get(args.systemd_preset, PRESETS["default"])
+
+        # Create config with actual config file path
+        systemd_config = SystemdConfig(
+            calendar=preset_config.calendar,
+            randomized_delay_sec=preset_config.randomized_delay_sec,
+            description=preset_config.description,
+            config_file=config_path,
+            use_test_mode=args.is_test,
+            notify_on_failure=True,
+            notify_command="/usr/local/bin/lematt-notify.sh",
+        )
+
+        installer = SystemdInstaller(config=systemd_config, dry_run=args.dry_run)
+
+        if args.install_systemd:
+            logger.info(f"Installing systemd timer ({args.systemd_preset} preset)")
+            logger.info(f"  Schedule: {systemd_config.calendar}")
+            logger.info(f"  Random delay: {systemd_config.randomized_delay_sec}s")
+            if installer.install():
+                logger.info("Systemd timer installed and enabled")
+                logger.info(f"  Service: {installer.service_path}")
+                logger.info(f"  Timer: {installer.timer_path}")
+                logger.info("Check status with: systemctl status lematt-renew.timer")
+            else:
+                logger.error("Failed to install systemd units")
+                return 1
+            return 0
+
+        if args.uninstall_systemd:
+            logger.info("Uninstalling systemd timer")
+            if installer.uninstall():
+                logger.info("Systemd timer uninstalled")
+            else:
+                logger.error("Failed to uninstall systemd units")
+                return 1
+            return 0
+
+        if args.systemd_status:
+            status = installer.status()
+            if args.json_output:
+                print(json.dumps(status, indent=2))
+            else:
+                logger.info("Systemd timer status:")
+                logger.info(f"  Service installed: {status['service_installed']}")
+                logger.info(f"  Timer installed: {status['timer_installed']}")
+                logger.info(f"  Timer active: {status['timer_active']}")
+                logger.info(f"  Timer enabled: {status['timer_enabled']}")
+                if status.get("next_trigger"):
+                    logger.info(f"  Next trigger: {status['next_trigger']}")
+                if status.get("last_trigger"):
+                    logger.info(f"  Last trigger: {status['last_trigger']}")
+            return 0
 
     # Load configuration
     config_base = os.path.dirname(os.path.realpath(args.config))
@@ -363,6 +525,151 @@ def main() -> int:
                     logger.info(f"     SANs: {sans_str}")
                 else:
                     logger.info(f"{i:3}. {d.primary_domain}{ocsp_marker}")
+        return 0
+
+    # Handle --health-check: run health checks on certificates
+    if args.health_check:
+        from lematt.health import (
+            HealthChecker,
+            HealthStatus,
+            PrometheusMetrics,
+            write_health_status_file,
+        )
+
+        domains = load_domains(config_base)
+
+        # Build minimal config for path generation
+        rsa_bits = int(config["keyBitsRSA"])
+        curve = config["curve"]
+        health_config = LemattConfig(
+            config_base=config_base,
+            challenge_dir=config["challengeDropDir"],
+            account_key=config["accountKey"],
+            rsa_key_bits=rsa_bits,
+            ec_curve=curve,
+            rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
+            curve_tag=config.get("curveTag", curve),
+            is_test=args.is_test,
+        )
+
+        checker = HealthChecker(
+            config=health_config,
+            warning_days=args.warning_days,
+            critical_days=args.critical_days,
+        )
+
+        # Check file-based certificates
+        health = checker.check_all_certificates(domains)
+
+        # Optionally check live certificates
+        if args.check_live:
+            logger.info("Checking live certificates...")
+            for domain_config in domains:
+                live_health = checker.check_live_certificate(domain_config.primary_domain)
+                health.certificates.append(live_health)
+                if live_health.status in (HealthStatus.CRITICAL, HealthStatus.WARNING):
+                    if live_health.status == HealthStatus.CRITICAL:
+                        health.status = HealthStatus.CRITICAL
+                    elif health.status == HealthStatus.HEALTHY:
+                        health.status = HealthStatus.WARNING
+
+        # Output results
+        if args.prometheus_output:
+            metrics = PrometheusMetrics(health)
+            print(metrics.generate())
+        elif args.json_output:
+            print(json.dumps(health.to_dict(), indent=2))
+        else:
+            status_icon = {
+                HealthStatus.HEALTHY: "✓",
+                HealthStatus.WARNING: "⚠",
+                HealthStatus.CRITICAL: "✗",
+                HealthStatus.UNKNOWN: "?",
+            }
+            logger.info(f"Health Check: {status_icon.get(health.status, '?')} {health.status}")
+            logger.info(health.summary)
+            logger.info("-" * 60)
+            for cert in health.certificates:
+                icon = status_icon.get(cert.status, "?")
+                logger.info(f"  {icon} {cert.domain} ({cert.key_type}): {cert.message}")
+
+        # Write to file if requested
+        if args.write_health:
+            health_path = Path(args.write_health)
+            fmt = "prometheus" if args.prometheus_output else "json"
+            write_health_status_file(health, health_path, format=fmt)
+            logger.info(f"Wrote health status to {health_path}")
+
+        # Return appropriate exit code for monitoring
+        if health.status == HealthStatus.CRITICAL:
+            return 2
+        elif health.status == HealthStatus.WARNING:
+            return 1
+        return 0
+
+    # Handle --test-notification: send test notification
+    if args.test_notification:
+        from lematt.notifications import (
+            NotificationConfig,
+            NotificationEvent,
+        )
+
+        # Try to load notification config from TOML if available
+        notify_config = NotificationConfig()
+
+        # Check for TOML config with notification settings
+        toml_path = Path(config_base) / "lematt.toml"
+        if toml_path.exists():
+            import tomllib
+
+            with open(toml_path, "rb") as f:
+                toml_data = tomllib.load(f)
+            if "notifications" in toml_data:
+                nc = toml_data["notifications"]
+                notify_config = NotificationConfig(
+                    email_to=nc.get("email_to"),
+                    email_from=nc.get("email_from", "lematt@localhost"),
+                    webhook_url=nc.get("webhook_url"),
+                    webhook_format=nc.get("webhook_format", "slack"),
+                    pagerduty_key=nc.get("pagerduty_key"),
+                    ntfy_topic=nc.get("ntfy_topic"),
+                    ntfy_server=nc.get("ntfy_server", "https://ntfy.sh"),
+                    custom_command=nc.get("custom_command"),
+                    journald_enabled=nc.get("journald_enabled", True),
+                )
+
+        manager = notify_config.create_manager()
+
+        if not manager.backends:
+            logger.error("No notification backends configured")
+            logger.error("Configure notifications in lematt.toml [notifications] section")
+            return 1
+
+        logger.info(f"Testing {len(manager.backends)} notification backend(s)...")
+
+        event = NotificationEvent(
+            event_type="info",
+            title="Test Notification",
+            message="This is a test notification from lematt",
+            details={"test": True, "config_path": str(config_base)},
+        )
+
+        # Force notification even for info events
+        manager.notify_on_success = True
+        results = manager.notify(event)
+
+        success_count = sum(1 for v in results.values() if v)
+        failure_count = sum(1 for v in results.values() if not v)
+
+        for backend_name, success in results.items():
+            status = "✓" if success else "✗"
+            logger.info(f"  {status} {backend_name}")
+
+        if failure_count > 0:
+            logger.warning(f"Some notifications failed: {failure_count}/{len(results)}")
+            return 1
+
+        logger.info(f"All notifications sent successfully: {success_count}")
         return 0
 
     # Build LemattConfig
