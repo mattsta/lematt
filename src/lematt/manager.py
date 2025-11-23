@@ -33,6 +33,85 @@ class CertificateRequestError(Exception):
     """Raised when certificate request fails after all retries."""
 
 
+class PrepareActionRunner:
+    """Handles prepare actions that must run before certificate requests.
+
+    Prepare actions start async processes (like temporary web servers)
+    that must be kept alive during the ACME challenge and killed afterward.
+    """
+
+    def __init__(self, config: LemattConfig) -> None:
+        self.config = config
+        self._processes: list[subprocess.Popen] = []
+
+    def prepare_domain(self, domain: str, domain_actions: dict) -> list[subprocess.Popen]:
+        """Run prepare actions for a domain before cert request.
+
+        Args:
+            domain: The domain to prepare.
+            domain_actions: Dictionary mapping domains to their action configs.
+
+        Returns:
+            List of running Popen processes that must be killed after cert request.
+        """
+        processes: list[subprocess.Popen] = []
+
+        # Get actions for this domain (or default)
+        actions = domain_actions.get(domain, domain_actions.get("default", {}))
+        every_actions = domain_actions.get("every", {})
+
+        def run_prepare(acts: dict) -> None:
+            if "prepare" not in acts:
+                return
+            for cmd in acts["prepare"]:
+                cmd = cmd.replace("DOMAIN", domain)
+                if self.config.is_dry_run:
+                    logger.info(f"[DRY-RUN] Would run prepare: {cmd}")
+                else:
+                    logger.info(f"[PREPARE] Starting: {cmd}")
+                    try:
+                        proc = subprocess.Popen(cmd, shell=True)
+                        processes.append(proc)
+                    except OSError as e:
+                        logger.error(f"[PREPARE] Failed to start: {cmd} - {e}")
+
+        run_prepare(actions)
+        run_prepare(every_actions)
+
+        self._processes.extend(processes)
+        return processes
+
+    def cleanup(self, processes: list[subprocess.Popen] | None = None) -> None:
+        """Kill prepare processes after certificate request completes.
+
+        Args:
+            processes: Specific processes to kill. If None, kills all tracked processes.
+        """
+        procs = processes if processes is not None else self._processes
+
+        if not procs:
+            return
+
+        for proc in procs:
+            try:
+                proc.terminate()
+                # Give process a moment to terminate gracefully
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            except OSError:
+                pass  # Process may have already exited
+
+        # Reset terminal if any prepare commands were run
+        with contextlib.suppress(subprocess.CalledProcessError, OSError):
+            subprocess.run(["stty", "sane"], check=False, capture_output=True)
+
+        if processes is None:
+            self._processes = []
+
+
 class CertificateManager:
     """Manages certificate generation, renewal, and deployment.
 
@@ -406,8 +485,29 @@ subjectAltName={san_config}"""
                     error_message="CSR generation failed",
                 )
 
-        # Request certificate
-        if not self.request_certificate(csr, cert):
+        # Run prepare actions before certificate request
+        # (e.g., start temporary web server, open firewall ports)
+        prepare_runner = PrepareActionRunner(self.config)
+        prepared_processes: list[subprocess.Popen] = []
+
+        try:
+            # Prepare all domains on this certificate
+            for domain in domain_config.all_domains:
+                procs = prepare_runner.prepare_domain(domain, domain_actions)
+                prepared_processes.extend(procs)
+
+            # Request certificate (prepare processes kept alive during ACME challenge)
+            cert_success = self.request_certificate(csr, cert)
+        finally:
+            # Always cleanup prepare processes, regardless of cert success
+            prepare_runner.cleanup(prepared_processes)
+
+        if not cert_success:
+            self.log(
+                f"Skipping symlinks for {domain_config} due to cert failure",
+                str(key_type),
+                update=True,
+            )
             return CertificateResult(
                 domain_config=domain_config,
                 key_type=key_type,
