@@ -13,6 +13,9 @@ A high-performance, type-safe certificate management system for automated Let's 
 - **TOML Configuration**: Modern config format with native list support (INI still supported)
 - **OCSP Must-Staple**: Per-domain OCSP stapling configuration
 - **Test Mode**: Isolated staging environment to validate configuration safely
+- **Systemd Integration**: One-command timer installation with security hardening
+- **Health Checks**: Certificate expiry monitoring with Prometheus metrics export
+- **Multi-Channel Alerting**: Email, Slack, Discord, PagerDuty, ntfy, and custom notifications
 
 ## Quick Start
 
@@ -94,14 +97,17 @@ lematt --prod --domain example.com
 
 ```
 lematt/
-├── cli.py           # Command-line interface and argument parsing
-├── config.py        # Configuration dataclasses (LemattConfig, DomainConfig, etc.)
-├── config_loader.py # Unified INI/TOML configuration loading
-├── manager.py       # CertificateManager - core certificate operations
-├── executor.py      # CertificateExecutor - parallel processing with error isolation
-├── actions.py       # ActionRunner - pre/post certificate workflow execution
-├── crypto.py        # Key generation, CSR creation, certificate parsing
-└── log.py           # Loguru-based structured logging
+├── cli.py            # Command-line interface and argument parsing
+├── config.py         # Configuration dataclasses (LemattConfig, DomainConfig, etc.)
+├── config_loader.py  # Unified INI/TOML configuration loading
+├── manager.py        # CertificateManager - core certificate operations
+├── executor.py       # CertificateExecutor - parallel processing with error isolation
+├── actions.py        # ActionRunner - pre/post certificate workflow execution
+├── crypto.py         # Key generation, CSR creation, certificate parsing
+├── log.py            # Loguru-based structured logging
+├── systemd.py        # Systemd timer/service generation and installation
+├── health.py         # Certificate health checking and monitoring
+└── notifications.py  # Multi-channel alerting (email, Slack, PagerDuty, etc.)
 ```
 
 ### Processing Flow
@@ -458,29 +464,104 @@ lematt --test --init-toml
 lematt --test -v
 ```
 
+### Systemd Commands
+
+```bash
+# Install systemd timer
+sudo lematt --prod --install-systemd
+
+# Install with preset schedule
+sudo lematt --prod --install-systemd --systemd-preset aggressive
+
+# Check timer status
+lematt --prod --systemd-status
+lematt --prod --systemd-status --json
+
+# Uninstall
+sudo lematt --prod --uninstall-systemd
+```
+
+### Health Check Commands
+
+```bash
+# Basic health check
+lematt --test --health-check
+
+# JSON output
+lematt --test --health-check --json
+
+# Prometheus metrics
+lematt --test --health-check --prometheus
+
+# Check live certificates (TLS connection)
+lematt --test --health-check --check-live
+
+# Custom thresholds
+lematt --test --health-check --warning-days 21 --critical-days 14
+
+# Write to file for monitoring
+lematt --test --health-check --write-health /var/lib/lematt/health.json
+```
+
+### Notification Commands
+
+```bash
+# Create notification config
+sudo lematt --prod --init-notifications
+
+# Test notifications
+lematt --test --test-notification
+```
+
 ### Complete Options
 
 ```
 usage: lematt [-h] (--prod | --test) [--cron] [--parallel N] [--config PATH]
               [-v] [--dry-run] [--status] [--json] [--list-domains]
               [--validate-config] [--domain DOMAIN] [--force-renew]
-              [--init-toml]
+              [--init-toml] [--install-systemd] [--uninstall-systemd]
+              [--systemd-status] [--systemd-preset PRESET]
+              [--health-check] [--check-live] [--warning-days N]
+              [--critical-days N] [--prometheus] [--write-health PATH]
+              [--init-notifications] [--test-notification]
 
-Options:
+Mode:
   --prod              Use production Let's Encrypt endpoint
   --test              Use staging Let's Encrypt endpoint
+
+Processing:
   --cron              Minimize output (only errors and renewals)
   --parallel N        Process N certificates in parallel (max 10)
   --config PATH       Path to configuration file
   -v, --verbose       Enable debug output
   --dry-run           Show what would be done without changes
-  --status            Show certificate status and exit
-  --json              Output as JSON (use with --status or --list-domains)
-  --list-domains      List all configured domains and exit
-  --validate-config   Validate configuration without processing
   --domain DOMAIN     Process only specified domain
   --force-renew       Force renewal regardless of expiration
+
+Information:
+  --status            Show certificate status and exit
+  --json              Output as JSON
+  --list-domains      List all configured domains and exit
+  --validate-config   Validate configuration without processing
   --init-toml         Create example lematt.toml and exit
+
+Systemd Automation:
+  --install-systemd   Install systemd timer and service
+  --uninstall-systemd Remove systemd timer and service
+  --systemd-status    Show status of systemd timer
+  --systemd-preset    Timer schedule: default, aggressive, conservative, weekly
+
+Health Checks:
+  --health-check      Run health check on all certificates
+  --check-live        Also check live certificates served by domains
+  --warning-days N    Days before expiry to warn (default: 14)
+  --critical-days N   Days before expiry for critical (default: 7)
+  --prometheus        Output health check as Prometheus metrics
+  --write-health PATH Write health status to file
+
+Notifications:
+  --init-notifications Create example notification config
+  --test-notification  Send a test notification
 ```
 
 ---
@@ -700,6 +781,334 @@ lematt --test --status
 | Certificates | Not trusted by browsers | Trusted |
 | File suffix | `.test.pem` | `.pem` |
 | Directory | `test/` | `prod/` |
+
+---
+
+## Automated Renewals with systemd
+
+lematt includes a complete systemd integration for automated certificate renewals with alerting.
+
+### Quick Setup
+
+```bash
+# Install systemd timer (default: twice daily)
+sudo lematt --prod --install-systemd
+
+# Check timer status
+lematt --prod --systemd-status
+systemctl status lematt-renew.timer
+
+# View logs
+journalctl -u lematt-renew.service -f
+```
+
+### Timer Presets
+
+| Preset | Schedule | Delay | Description |
+|--------|----------|-------|-------------|
+| `default` | `*-*-* 00,12:00:00` | 1 hour | Twice daily (Let's Encrypt recommended) |
+| `aggressive` | `*-*-* 00,06,12,18:00:00` | 30 min | Four times daily |
+| `conservative` | `*-*-* 03:00:00` | 2 hours | Once daily at 3 AM |
+| `weekly` | `Mon *-*-* 03:00:00` | 1 hour | Weekly on Monday |
+
+```bash
+# Install with preset
+sudo lematt --prod --install-systemd --systemd-preset aggressive
+
+# Uninstall
+sudo lematt --prod --uninstall-systemd
+```
+
+### Systemd Unit Details
+
+The installer creates:
+
+| File | Purpose |
+|------|---------|
+| `/etc/systemd/system/lematt-renew.service` | Service unit with security hardening |
+| `/etc/systemd/system/lematt-renew.timer` | Timer unit with randomized delay |
+| `/usr/local/bin/lematt-notify.sh` | Notification helper script |
+| `/etc/lematt/notify.conf` | Notification configuration |
+
+### Generated Service Unit
+
+```systemd
+[Unit]
+Description=Lematt Certificate Renewal Service
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/env python3 -m lematt --config /etc/lematt/lematt.conf
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/etc/lematt
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Manual Trigger
+
+```bash
+# Run immediately (outside scheduled time)
+sudo systemctl start lematt-renew.service
+
+# Follow output
+sudo journalctl -u lematt-renew.service -f
+```
+
+---
+
+## Health Checks and Monitoring
+
+lematt provides comprehensive health checking for certificate monitoring and alerting.
+
+### Basic Health Check
+
+```bash
+# Check all certificates
+lematt --test --health-check
+
+# Output:
+# Health Check: ✓ healthy
+# Certificates: 0 critical, 0 warning, 4 healthy
+# ------------------------------------------------------------
+#   ✓ example.com (rsa): Certificate valid for 45 days
+#   ✓ example.com (ec): Certificate valid for 45 days
+#   ⚠ other.com (rsa): Certificate expires in 12 days
+#   ✗ expired.com (ec): Certificate EXPIRED 5 days ago
+```
+
+### Health Check Options
+
+```bash
+# JSON output for monitoring systems
+lematt --test --health-check --json
+
+# Prometheus metrics format
+lematt --test --health-check --prometheus
+
+# Write health status to file (for external monitoring)
+lematt --test --health-check --write-health /var/lib/lematt/health.json
+
+# Check live certificates served by domains
+lematt --test --health-check --check-live
+
+# Custom warning/critical thresholds
+lematt --test --health-check --warning-days 21 --critical-days 14
+```
+
+### Exit Codes
+
+| Code | Status | Meaning |
+|------|--------|---------|
+| 0 | Healthy | All certificates valid |
+| 1 | Warning | Certificates expiring soon |
+| 2 | Critical | Certificates expired or expiring very soon |
+| 3 | Unknown | Unable to check some certificates |
+
+### JSON Health Output
+
+```json
+{
+  "status": "warning",
+  "summary": "Certificates: 1 critical, 2 warning, 8 healthy",
+  "checked_at": "2024-05-01T12:00:00",
+  "counts": {
+    "healthy": 8,
+    "warning": 2,
+    "critical": 1,
+    "unknown": 0,
+    "total": 11
+  },
+  "certificates": [
+    {
+      "domain": "example.com",
+      "key_type": "rsa",
+      "status": "healthy",
+      "message": "Certificate valid for 45 days",
+      "cert_path": "/etc/lematt/prod/cert/example.com-cert.pem",
+      "days_until_expiry": 45,
+      "not_after": "2024-06-15T00:00:00",
+      "issuer": "CN=Let's Encrypt Authority X3"
+    }
+  ]
+}
+```
+
+### Prometheus Metrics
+
+```bash
+lematt --test --health-check --prometheus
+```
+
+```prometheus
+# HELP lematt_certificate_expiry_days Days until certificate expires
+# TYPE lematt_certificate_expiry_days gauge
+lematt_certificate_expiry_days{domain="example.com",key_type="rsa"} 45
+lematt_certificate_expiry_days{domain="example.com",key_type="ec"} 45
+
+# HELP lematt_certificate_status Certificate health status (0=healthy, 1=warning, 2=critical, 3=unknown)
+# TYPE lematt_certificate_status gauge
+lematt_certificate_status{domain="example.com",key_type="rsa"} 0
+lematt_certificate_status{domain="example.com",key_type="ec"} 0
+
+# HELP lematt_certificates_total Total number of certificates by status
+# TYPE lematt_certificates_total gauge
+lematt_certificates_total{status="healthy"} 4
+lematt_certificates_total{status="warning"} 0
+lematt_certificates_total{status="critical"} 0
+```
+
+### Monitoring Integration
+
+**Cron health check:**
+```bash
+# /etc/cron.d/lematt-health
+*/30 * * * * root lematt --prod --health-check --write-health /var/lib/lematt/health.json
+```
+
+**Nagios/Icinga check:**
+```bash
+#!/bin/bash
+# /usr/local/lib/nagios/plugins/check_lematt
+
+lematt --prod --health-check 2>/dev/null
+exit $?
+```
+
+---
+
+## Alerting and Notifications
+
+lematt supports multiple notification backends for alerting on certificate issues.
+
+### Configure Notifications
+
+**In TOML config:**
+```toml
+[notifications]
+# Email (requires sendmail or SMTP)
+email_to = "admin@example.com"
+email_from = "lematt@example.com"
+
+# Slack webhook
+webhook_url = "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+webhook_format = "slack"  # slack, discord, or generic
+
+# PagerDuty (only alerts on failures)
+pagerduty_key = "your-integration-key"
+
+# Ntfy push notifications (https://ntfy.sh)
+ntfy_topic = "my-cert-alerts"
+ntfy_server = "https://ntfy.sh"
+
+# Custom command
+custom_command = "/usr/local/bin/my-notify-script.sh"
+
+# Journald logging (enabled by default)
+journald_enabled = true
+
+# When to notify
+notify_on_failure = true
+notify_on_warning = true
+notify_on_success = false
+```
+
+### Test Notifications
+
+```bash
+# Send test notification to verify configuration
+lematt --test --test-notification
+
+# Output:
+# Testing 3 notification backend(s)...
+#   ✓ email
+#   ✓ webhook-slack
+#   ✓ journald
+# All notifications sent successfully: 3
+```
+
+### Notification Backends
+
+| Backend | Configuration | Description |
+|---------|---------------|-------------|
+| **Email** | `email_to`, `email_from` | Uses sendmail or SMTP |
+| **Slack** | `webhook_url`, `webhook_format="slack"` | Slack incoming webhook |
+| **Discord** | `webhook_url`, `webhook_format="discord"` | Discord webhook |
+| **PagerDuty** | `pagerduty_key` | Only triggers on failures |
+| **Ntfy** | `ntfy_topic`, `ntfy_server` | Push notifications |
+| **Command** | `custom_command` | Run custom script |
+| **Journald** | `journald_enabled` | Systemd journal logging |
+
+### Shell Script Notifications
+
+The systemd installer creates `/usr/local/bin/lematt-notify.sh` which supports multiple backends via environment variables in `/etc/lematt/notify.conf`:
+
+```bash
+# /etc/lematt/notify.conf
+NOTIFY_EMAIL="admin@example.com"
+NOTIFY_WEBHOOK="https://hooks.slack.com/services/XXX/YYY/ZZZ"
+PAGERDUTY_KEY="your-integration-key"
+NTFY_TOPIC="my-cert-alerts"
+NOTIFY_CUSTOM_CMD="/usr/local/bin/my-script.sh"
+```
+
+### Notification Events
+
+| Event Type | Trigger | Default |
+|------------|---------|---------|
+| `failure` | Certificate renewal failed | Notify ✓ |
+| `warning` | Certificate expiring soon | Notify ✓ |
+| `success` | Renewal completed successfully | Silent |
+| `info` | Informational (test notifications) | Silent |
+
+### Slack Notification Example
+
+```json
+{
+  "attachments": [{
+    "color": "danger",
+    "title": "Certificate Renewal Failed",
+    "text": "Failed to renew 2 certificates",
+    "fields": [
+      {"title": "Host", "value": "web-server-01", "short": true},
+      {"title": "Time", "value": "2024-05-01 12:00:00", "short": true},
+      {"title": "Domains", "value": "example.com, api.example.com", "short": true}
+    ],
+    "footer": "Lematt Certificate Manager"
+  }]
+}
+```
+
+### Custom Notification Script
+
+Create a custom notification handler:
+
+```bash
+#!/bin/bash
+# /usr/local/bin/my-notify-script.sh
+# Receives: event_type title message hostname timestamp
+
+EVENT_TYPE="$1"
+TITLE="$2"
+MESSAGE="$3"
+HOSTNAME="$4"
+TIMESTAMP="$5"
+
+# Your custom notification logic here
+curl -X POST "https://your-endpoint.com/webhook" \
+  -H "Content-Type: application/json" \
+  -d "{\"event\": \"$EVENT_TYPE\", \"title\": \"$TITLE\", \"message\": \"$MESSAGE\"}"
+```
 
 ---
 

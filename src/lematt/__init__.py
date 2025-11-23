@@ -42,8 +42,27 @@ from lematt.executor import (
     TaskProgress,
     TaskStatus,
 )
+from lematt.health import (
+    CertificateHealth,
+    HealthChecker,
+    HealthStatus,
+    PrometheusMetrics,
+    SystemHealth,
+)
 from lematt.log import logger, setup_logging
 from lematt.manager import CertificateManager
+from lematt.notifications import (
+    NotificationConfig,
+    NotificationEvent,
+    NotificationManager,
+)
+from lematt.systemd import (
+    PRESETS as SYSTEMD_PRESETS,
+)
+from lematt.systemd import (
+    SystemdConfig,
+    SystemdInstaller,
+)
 
 __all__ = [
     # Version
@@ -79,4 +98,18 @@ __all__ = [
     "TaskProgress",
     "TaskStatus",
     "RateLimiter",
+    # Health checks
+    "HealthChecker",
+    "HealthStatus",
+    "CertificateHealth",
+    "SystemHealth",
+    "PrometheusMetrics",
+    # Notifications
+    "NotificationConfig",
+    "NotificationEvent",
+    "NotificationManager",
+    # Systemd
+    "SystemdConfig",
+    "SystemdInstaller",
+    "SYSTEMD_PRESETS",
 ]

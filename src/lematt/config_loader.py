@@ -402,6 +402,48 @@ update = [
 update = [
     "/usr/local/bin/backup-certs.sh",
 ]
+
+# Notification configuration
+# Configure alerting for renewal failures and expiry warnings
+
+[notifications]
+# Email notifications (requires sendmail or SMTP configured)
+# email_to = "admin@example.com"
+# email_from = "lematt@example.com"
+
+# Webhook notifications (Slack, Discord, etc.)
+# webhook_url = "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+# webhook_format = "slack"  # slack, discord, or generic
+
+# PagerDuty integration (only alerts on failures)
+# pagerduty_key = "your-integration-key"
+
+# Ntfy push notifications (https://ntfy.sh)
+# ntfy_topic = "my-cert-alerts"
+# ntfy_server = "https://ntfy.sh"
+
+# Custom notification command
+# custom_command = "/usr/local/bin/my-notify-script.sh"
+
+# Journald logging (enabled by default)
+journald_enabled = true
+
+# When to send notifications
+notify_on_failure = true
+notify_on_warning = true
+notify_on_success = false
+
+# Systemd timer configuration (used by --install-systemd)
+
+[systemd]
+# Timer schedule (default: twice daily at midnight and noon)
+# calendar = "*-*-* 00,12:00:00"
+
+# Random delay to spread load (seconds)
+# randomized_delay_sec = 3600
+
+# Run missed timers on boot
+# persistent = true
 '''
     path.write_text(example)
     logger.info(f"Created example TOML config at {path}")
