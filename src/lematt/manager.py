@@ -1,0 +1,541 @@
+"""Certificate management for lematt.
+
+This module provides the CertificateManager class that encapsulates
+all certificate generation, renewal, and management operations.
+"""
+
+import contextlib
+import datetime
+import logging
+import os
+import pathlib
+import subprocess
+import tempfile
+import time
+from datetime import timedelta
+from typing import TYPE_CHECKING
+
+from lematt.config import (
+    CertificateResult,
+    DomainConfig,
+    KeyType,
+    LemattConfig,
+    RenewalSummary,
+)
+from lematt.crypto import HAS_CRYPTOGRAPHY, get_certificate_info
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+logger = logging.getLogger("lematt")
+
+
+class CertificateRequestError(Exception):
+    """Raised when certificate request fails after all retries."""
+
+
+class CertificateManager:
+    """Manages certificate generation, renewal, and deployment.
+
+    This class encapsulates all certificate operations and eliminates
+    global state by accepting configuration through __init__.
+    """
+
+    def __init__(self, config: LemattConfig) -> None:
+        """Initialize the certificate manager.
+
+        Args:
+            config: The lematt configuration object.
+        """
+        self.config = config
+        self._acme_module: object | None = None
+
+    @property
+    def acme(self) -> object:
+        """Lazily load the ACME module."""
+        if self._acme_module is None:
+            import acme_tiny
+
+            self._acme_module = acme_tiny
+        return self._acme_module
+
+    def log(self, message: str, mode: str = "", update: bool = False) -> None:
+        """Log a message with optional mode prefix.
+
+        Args:
+            message: The message to log.
+            mode: Optional category/mode prefix.
+            update: If True, always log even in cron mode.
+        """
+        if not message:
+            if not self.config.is_cron:
+                print("")
+            return
+
+        prefix = "[TEST] " if self.config.is_test else "> "
+        mode_str = f"[{mode}] " if mode else ""
+        full_message = f"{prefix}{mode_str}{message}"
+
+        if mode in ("ERROR", "FAIL"):
+            logger.error(full_message)
+        elif mode in ("WARN", "WARNING"):
+            logger.warning(full_message)
+        elif update:
+            logger.info(full_message)
+        else:
+            logger.debug(full_message)
+
+    def ensure_directories(self) -> None:
+        """Create required directory hierarchy."""
+        for name in ["key", "cert", "csr"]:
+            subdir = self.config.get_subdir(name)
+            adir = pathlib.Path(f"{self.config.config_base}/{subdir}")
+            adir.mkdir(parents=True, exist_ok=True)
+
+    def get_customized_name(
+        self,
+        subdir: str,
+        name: str,
+        subtype: str,
+        key_type: KeyType,
+        ext: str = "pem",
+    ) -> str:
+        """Generate a customized filename for keys, certs, or CSRs."""
+        tag = self.config.rsa_tag if key_type == KeyType.RSA else self.config.curve_tag
+        test_suffix = ".test" if self.config.is_test else ""
+        return (
+            f"{self.config.config_base}/"
+            f"{self.config.get_subdir(subdir)}/"
+            f"{name}-{subtype}.{tag}{test_suffix}.{ext}"
+        )
+
+    def cert_needs_renewal(
+        self,
+        cert_path: str,
+        utcnow: datetime.datetime,
+    ) -> bool:
+        """Check if a certificate needs renewal based on expiration date."""
+        if not os.path.isfile(cert_path):
+            return True
+
+        cert_info = get_certificate_info(cert_path)
+        if not cert_info.exists or cert_info.parse_error:
+            return True
+
+        if cert_info.not_after is None:
+            return True
+
+        remaining = cert_info.not_after - utcnow
+        if remaining < timedelta(days=0):
+            return True  # Already expired
+
+        return remaining < self.config.reauthorize_timedelta
+
+    def request_certificate(
+        self,
+        csr_path: str,
+        output_path: str,
+        max_retries: int = 3,
+    ) -> bool:
+        """Request a signed certificate from Let's Encrypt.
+
+        Args:
+            csr_path: Path to the CSR file.
+            output_path: Path to write the signed certificate.
+            max_retries: Maximum number of retry attempts.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        directory = self.config.acme_directory_url
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                signed_cert = self.acme.get_crt(
+                    self.config.account_key,
+                    csr_path,
+                    self.config.challenge_dir,
+                    directory_url=directory,
+                )
+                with open(output_path, "w") as f:
+                    f.write(signed_cert)
+                return True
+            except Exception as e:
+                last_error = e
+                wait_time = 2**attempt
+                if attempt < max_retries - 1:
+                    self.log(
+                        f"Certificate request failed (attempt {attempt + 1}/{max_retries}): {e}",
+                        "RETRY",
+                    )
+                    self.log(f"Retrying in {wait_time} seconds...", "RETRY")
+                    time.sleep(wait_time)
+                else:
+                    self.log(
+                        f"Certificate request failed after {max_retries} attempts: {e}",
+                        "ERROR",
+                        update=True,
+                    )
+
+        self.log(f"FAILED FOR CSR: {csr_path}", "ERROR", update=True)
+        self.log(f"Last error: {last_error}", "ERROR", update=True)
+        return False
+
+    def generate_key(
+        self,
+        output_path: str,
+        key_type: KeyType,
+    ) -> bool:
+        """Generate a private key.
+
+        Args:
+            output_path: Path to write the key.
+            key_type: Type of key to generate (RSA or EC).
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        try:
+            if key_type == KeyType.EC:
+                self.log(f"Generating EC {self.config.ec_curve} key...", str(key_type))
+                cmd = ["openssl", "ecparam", "-genkey", "-name", self.config.ec_curve]
+            else:
+                self.log(f"Generating RSA {self.config.rsa_key_bits} key...", str(key_type))
+                cmd = ["openssl", "genrsa", str(self.config.rsa_key_bits)]
+
+            result = subprocess.run(cmd, capture_output=True, check=True)
+
+            # Write with secure permissions
+            with os.fdopen(
+                os.open(output_path, os.O_WRONLY | os.O_CREAT, 0o600), "wb"
+            ) as f:
+                f.write(result.stdout)
+
+            return True
+        except subprocess.CalledProcessError as e:
+            self.log(f"Key generation failed: {e}", "ERROR", update=True)
+            return False
+
+    def generate_csr(
+        self,
+        private_key_path: str,
+        domains: list[str],
+        output_path: str,
+        ocsp_must_staple: bool = False,
+    ) -> bool:
+        """Generate a Certificate Signing Request.
+
+        Args:
+            private_key_path: Path to the private key.
+            domains: List of domains for the certificate.
+            output_path: Path to write the CSR.
+            ocsp_must_staple: Whether to include OCSP Must-Staple extension.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        self.log("Generating CSR...", "CSR")
+
+        primary_domain = domains[0]
+        use_san = len(domains) > 1
+
+        san_config = ""
+        cmd_san = ""
+        if use_san:
+            alt_names = [f"DNS:{domain}" for domain in domains]
+            san_config = ",".join(alt_names)
+            cmd_san = "-reqexts SAN"
+
+        ocsp_line = ""
+        if ocsp_must_staple:
+            ocsp_line = "1.3.6.1.5.5.7.1.24 = DER:30:03:02:01:05"
+
+        stdin_config = f"""[req]
+distinguished_name=req_dn
+
+[req_dn]
+
+[v3_req]
+basicConstraints=CA:FALSE
+keyUsage=nonRepudiation,digitalSignature,keyEncipherment
+{ocsp_line}
+
+[SAN]
+subjectAltName={san_config}"""
+
+        try:
+            cmd = (
+                f"openssl req -new -sha256 -key {private_key_path} "
+                f"-subj /CN={primary_domain} {cmd_san} -config -"
+            )
+            result = subprocess.run(
+                cmd.split(),
+                input=stdin_config.encode(),
+                capture_output=True,
+                check=True,
+            )
+            with open(output_path, "wb") as f:
+                f.write(result.stdout)
+            return True
+        except subprocess.CalledProcessError as e:
+            self.log(f"CSR generation failed: {e}", "ERROR", update=True)
+            return False
+
+    def create_atomic_symlink(
+        self,
+        target: str,
+        link_path: str,
+        key_type: KeyType,
+    ) -> bool:
+        """Create a symlink atomically to avoid race conditions.
+
+        Args:
+            target: The target file (just the filename, not full path).
+            link_path: The full path for the symlink.
+            key_type: Key type for logging.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        self.log(f"Linking {target} to {link_path}", str(key_type), update=True)
+        temp_link = tempfile.mktemp(dir=os.path.dirname(link_path))
+        try:
+            os.symlink(target, temp_link)
+            os.replace(temp_link, link_path)
+            return True
+        except OSError as e:
+            self.log(f"Warning: Could not create symlink {link_path}: {e}", "WARN")
+            with contextlib.suppress(OSError):
+                os.unlink(temp_link)
+            return False
+
+    def process_domain(
+        self,
+        domain_config: DomainConfig,
+        key_type: KeyType,
+        domain_actions: dict,
+    ) -> CertificateResult:
+        """Process a single domain for certificate renewal.
+
+        Args:
+            domain_config: The domain configuration.
+            key_type: Type of key (RSA or EC).
+            domain_actions: Dictionary of domain-specific actions.
+
+        Returns:
+            CertificateResult with the operation outcome.
+        """
+        utcnow = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+
+        # Build file paths
+        filename_base = domain_config.filename_base
+        private_key = self.get_customized_name("key", filename_base, "key", key_type)
+        cert = self.get_customized_name("cert", filename_base, "cert-combined", key_type)
+        csr = self.get_customized_name("csr", filename_base, "csr", key_type, "csr")
+
+        self.log(f"Checking certificate for {domain_config}...", str(key_type))
+
+        # Check if renewal is needed
+        needs_renewal = self.cert_needs_renewal(cert, utcnow)
+        if self.config.force_renew:
+            self.log("Force renewal requested", str(key_type), update=True)
+            needs_renewal = True
+
+        if not needs_renewal:
+            self.log("Not renewing!", str(key_type))
+            return CertificateResult(
+                domain_config=domain_config,
+                key_type=key_type,
+                success=True,
+                renewed=False,
+                cert_path=cert,
+                key_path=private_key,
+            )
+
+        self.log(f"Renewing {domain_config}!", str(key_type), update=True)
+
+        # Dry-run mode
+        if self.config.is_dry_run:
+            self.log(f"[DRY-RUN] Would generate key: {private_key}", str(key_type), update=True)
+            self.log(f"[DRY-RUN] Would generate CSR: {csr}", str(key_type), update=True)
+            self.log(f"[DRY-RUN] Would request certificate: {cert}", str(key_type), update=True)
+            return CertificateResult(
+                domain_config=domain_config,
+                key_type=key_type,
+                success=True,
+                renewed=True,
+                cert_path=cert,
+                key_path=private_key,
+            )
+
+        # Generate key if needed (nested if is intentional - only generate then check result)
+        if self.config.always_generate_new_keys or not os.path.isfile(private_key):  # noqa: SIM102
+            if not self.generate_key(private_key, key_type):
+                return CertificateResult(
+                    domain_config=domain_config,
+                    key_type=key_type,
+                    success=False,
+                    renewed=True,
+                    error_message="Key generation failed",
+                )
+
+        # Create key symlinks for SAN domains
+        for domain in domain_config.san_domains:
+            single_domain_key = self.get_customized_name("key", domain, "key", key_type)
+            self.create_atomic_symlink(
+                os.path.basename(private_key),
+                single_domain_key,
+                key_type,
+            )
+
+        # Generate CSR if needed
+        if self.config.always_generate_new_keys or not os.path.isfile(csr):
+            # Check OCSP requirements
+            ocsp_required = self._check_ocsp_requirement(domain_config, domain_actions)
+            if not self.generate_csr(
+                private_key,
+                domain_config.all_domains,
+                csr,
+                ocsp_required,
+            ):
+                return CertificateResult(
+                    domain_config=domain_config,
+                    key_type=key_type,
+                    success=False,
+                    renewed=True,
+                    error_message="CSR generation failed",
+                )
+
+        # Request certificate
+        if not self.request_certificate(csr, cert):
+            return CertificateResult(
+                domain_config=domain_config,
+                key_type=key_type,
+                success=False,
+                renewed=True,
+                error_message="Certificate request failed",
+            )
+
+        # Create cert symlinks for SAN domains
+        for domain in domain_config.san_domains:
+            single_domain_cert = self.get_customized_name("cert", domain, "cert-combined", key_type)
+            self.create_atomic_symlink(
+                os.path.basename(cert),
+                single_domain_cert,
+                key_type,
+            )
+
+        self.log("")  # Visual break
+        return CertificateResult(
+            domain_config=domain_config,
+            key_type=key_type,
+            success=True,
+            renewed=True,
+            cert_path=cert,
+            key_path=private_key,
+        )
+
+    def _check_ocsp_requirement(
+        self,
+        domain_config: DomainConfig,
+        domain_actions: dict,
+    ) -> bool:
+        """Check if OCSP stapling is required for a domain.
+
+        Args:
+            domain_config: The domain configuration.
+            domain_actions: Dictionary of domain-specific actions.
+
+        Returns:
+            True if OCSP stapling is required.
+        """
+
+        def get_ocsp(domain: str) -> bool:
+            if domain in domain_actions:
+                return domain_actions[domain].get("ocspStapleRequired", False)
+            return domain_actions.get("default", {}).get("ocspStapleRequired", False)
+
+        # All domains must have the same OCSP requirement
+        first_ocsp = get_ocsp(domain_config.primary_domain)
+        for domain in domain_config.san_domains:
+            if get_ocsp(domain) != first_ocsp:
+                raise ValueError(
+                    f"All SAN domains must have same OCSP config: {domain_config.all_domains}"
+                )
+        return first_ocsp
+
+    def show_status(self, domains: Sequence[DomainConfig]) -> None:
+        """Display status of all configured certificates.
+
+        Args:
+            domains: List of domain configurations.
+        """
+        print("\n" + "=" * 80)
+        print("CERTIFICATE STATUS REPORT")
+        if HAS_CRYPTOGRAPHY:
+            print("(Using native cryptography library)")
+        else:
+            print("(Using openssl subprocess - install 'cryptography' for better performance)")
+        print("=" * 80)
+        print(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
+        print("-" * 80)
+
+        for domain_config in domains:
+            for key_type in [KeyType.RSA, KeyType.EC]:
+                cert_path = self.config.get_cert_path(domain_config, key_type)
+                cert_info = get_certificate_info(cert_path)
+
+                if not cert_info.exists:
+                    status = "⚠️  MISSING"
+                    expires_str = "N/A"
+                    days_left = "N/A"
+                elif cert_info.parse_error:
+                    status = "⚠️  PARSE ERROR"
+                    expires_str = "Unknown"
+                    days_left = "?"
+                elif cert_info.not_after:
+                    days = cert_info.days_until_expiry
+                    expires_str = cert_info.not_after.strftime("%Y-%m-%d")
+                    days_left = str(days) if days is not None else "?"
+
+                    if cert_info.is_expired:
+                        status = "❌ EXPIRED"
+                    elif days is not None and days < 7:
+                        status = "🔴 CRITICAL"
+                    elif days is not None and days < 30:
+                        status = "🟡 RENEW SOON"
+                    else:
+                        status = "✅ OK"
+                else:
+                    status = "⚠️  UNKNOWN"
+                    expires_str = "Unknown"
+                    days_left = "?"
+
+                domain_with_type = f"{domain_config} ({key_type.name})"
+                print(f"{domain_with_type:<40} {expires_str:<20} {days_left:<12} {status}")
+
+        print("=" * 80 + "\n")
+
+    def process_all_domains(
+        self,
+        domains: Sequence[DomainConfig],
+        domain_actions: dict,
+    ) -> RenewalSummary:
+        """Process all domains for certificate renewal.
+
+        Args:
+            domains: List of domain configurations.
+            domain_actions: Dictionary of domain-specific actions.
+
+        Returns:
+            RenewalSummary with all operation outcomes.
+        """
+        summary = RenewalSummary()
+
+        for domain_config in domains:
+            for key_type in [KeyType.RSA, KeyType.EC]:
+                result = self.process_domain(domain_config, key_type, domain_actions)
+                summary.add_result(result)
+
+        return summary
