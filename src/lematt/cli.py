@@ -6,6 +6,7 @@ for the lematt certificate management tool.
 
 import argparse
 import configparser
+import json
 import os
 import sys
 
@@ -21,6 +22,14 @@ from lematt.manager import CertificateManager
 def load_domains(config_base: str) -> list[DomainConfig]:
     """Load domain configuration from the domains file.
 
+    Supports per-domain OCSP stapling configuration:
+    - +ocsp : Enable OCSP Must-Staple for this certificate
+    - -ocsp : Explicitly disable OCSP Must-Staple (default)
+
+    Example:
+        example.com www mail +ocsp
+        other.com www -ocsp
+
     Args:
         config_base: Base configuration directory.
 
@@ -31,29 +40,51 @@ def load_domains(config_base: str) -> list[DomainConfig]:
     domains_file = f"{config_base}/domains"
 
     with open(domains_file) as f:
-        for line in f:
+        for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
 
             parts = line.split()
-            if len(parts) > 100:
-                print(
-                    f"Error! Domain limit is 100 per certificate, "
-                    f"but configured {len(parts)}: {parts}"
+
+            # Extract OCSP flags
+            ocsp_required = False
+            domain_parts: list[str] = []
+            for part in parts:
+                if part == "+ocsp":
+                    ocsp_required = True
+                elif part == "-ocsp":
+                    ocsp_required = False
+                else:
+                    domain_parts.append(part)
+
+            if not domain_parts:
+                logger.warning(f"Skipping empty domain line {line_num}")
+                continue
+
+            if len(domain_parts) > 100:
+                logger.error(
+                    f"Domain limit is 100 per certificate, "
+                    f"but configured {len(domain_parts)}: {domain_parts}"
                 )
                 sys.exit(1)
 
-            primary = parts[0]
+            primary = domain_parts[0]
             sans: list[str] = []
 
-            for domain in parts[1:]:
+            for domain in domain_parts[1:]:
                 # Shorthand: subdomain without dot gets primary appended
                 if "." not in domain:
                     domain = f"{domain}.{primary}"
                 sans.append(domain)
 
-            domains.append(DomainConfig(primary_domain=primary, san_domains=sans))
+            domains.append(
+                DomainConfig(
+                    primary_domain=primary,
+                    san_domains=sans,
+                    ocsp_staple_required=ocsp_required,
+                )
+            )
 
     return domains
 
@@ -206,6 +237,24 @@ def main() -> int:
         help="Show certificate status and exit",
     )
     parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Output status as JSON (use with --status)",
+    )
+    parser.add_argument(
+        "--list-domains",
+        dest="list_domains",
+        action="store_true",
+        help="List all configured domains and exit",
+    )
+    parser.add_argument(
+        "--validate-config",
+        dest="validate_only",
+        action="store_true",
+        help="Validate configuration without processing certificates",
+    )
+    parser.add_argument(
         "--domain",
         dest="single_domain",
         default=None,
@@ -217,11 +266,32 @@ def main() -> int:
         action="store_true",
         help="Force renewal regardless of expiration date",
     )
+    parser.add_argument(
+        "--init-toml",
+        dest="init_toml",
+        action="store_true",
+        help="Create example lematt.toml configuration file and exit",
+    )
 
     args = parser.parse_args()
 
     # Set up logging
     setup_logging(verbose=args.verbose, cron=args.is_cron, test_mode=args.is_test)
+
+    # Handle --init-toml: create example config and exit
+    if args.init_toml:
+        from pathlib import Path
+
+        from lematt.config_loader import create_example_toml
+
+        config_dir = Path(os.path.dirname(os.path.realpath(args.config)))
+        toml_path = config_dir / "lematt.toml"
+        if toml_path.exists():
+            logger.error(f"Config file already exists: {toml_path}")
+            return 1
+        create_example_toml(toml_path)
+        logger.info("Edit the file and customize for your environment")
+        return 0
 
     # Load configuration
     config_base = os.path.dirname(os.path.realpath(args.config))
@@ -241,6 +311,59 @@ def main() -> int:
 
     config = conf["config"]
     validate_config(config, config_base)
+
+    # Handle --validate-config: just validate and exit
+    if args.validate_only:
+        logger.info("Configuration is valid!")
+        logger.info(f"  Config base: {config_base}")
+        logger.info(f"  Challenge dir: {config['challengeDropDir']}")
+        logger.info(f"  Account key: {config['accountKey']}")
+        logger.info(f"  RSA key bits: {config['keyBitsRSA']}")
+        logger.info(f"  EC curve: {config['curve']}")
+        # Try loading domains to validate that too
+        try:
+            domains = load_domains(config_base)
+            logger.info(f"  Domains configured: {len(domains)}")
+            # Try loading actions to validate that too
+            temp_config = LemattConfig(
+                config_base=config_base,
+                challenge_dir=config["challengeDropDir"],
+                account_key=config["accountKey"],
+            )
+            action_runner = ActionRunner(temp_config)
+            action_runner.load_actions()
+            action_count = len(action_runner.actions.all_action_names())
+            logger.info(f"  Action configs: {action_count}")
+        except Exception as e:
+            logger.error(f"Validation error: {e}")
+            return 1
+        return 0
+
+    # Handle --list-domains: list all configured domains and exit
+    if args.list_domains:
+        domains = load_domains(config_base)
+        if args.json_output:
+            domain_list = []
+            for d in domains:
+                domain_list.append({
+                    "primary": d.primary_domain,
+                    "sans": d.san_domains,
+                    "all_domains": d.all_domains,
+                    "ocsp_staple_required": d.ocsp_staple_required,
+                })
+            print(json.dumps(domain_list, indent=2))  # JSON data output to stdout
+        else:
+            logger.info(f"Configured domains ({len(domains)} certificates):")
+            logger.info("-" * 60)
+            for i, d in enumerate(domains, 1):
+                ocsp_marker = " [+ocsp]" if d.ocsp_staple_required else ""
+                if d.san_domains:
+                    sans_str = ", ".join(d.san_domains)
+                    logger.info(f"{i:3}. {d.primary_domain}{ocsp_marker}")
+                    logger.info(f"     SANs: {sans_str}")
+                else:
+                    logger.info(f"{i:3}. {d.primary_domain}{ocsp_marker}")
+        return 0
 
     # Build LemattConfig
     rsa_bits = int(config["keyBitsRSA"])
@@ -286,18 +409,20 @@ def main() -> int:
 
     # Show status and exit if requested
     if args.show_status:
-        manager.show_status(configured_domains)
+        status_data = manager.show_status(configured_domains, json_output=args.json_output)
+        if args.json_output and status_data:
+            print(json.dumps(status_data, indent=2))  # JSON data output to stdout
         return 0
 
     # Display welcome message
     if not args.is_cron:
         prefix = "[TEST MODE — DO NOT USE TEST CERTS IN PRODUCTION] " if args.is_test else ""
-        print(f"{prefix}Welcome to LE Matt!")
+        logger.info(f"{prefix}Welcome to LE Matt!")
         if args.dry_run:
-            print("[DRY-RUN MODE - No changes will be made]")
-        print("Using domain list:")
+            logger.info("[DRY-RUN MODE - No changes will be made]")
+        logger.info("Using domain list:")
         for domain in configured_domains:
-            print(f"\t{domain}")
+            logger.info(f"\t{domain}")
 
     # Verify account key exists
     if not os.path.isfile(lematt_config.account_key):

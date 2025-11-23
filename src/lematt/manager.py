@@ -18,7 +18,9 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from lematt.config import (
+    ActionConfig,
     CertificateResult,
+    DomainActions,
     DomainConfig,
     KeyType,
     LemattConfig,
@@ -45,12 +47,12 @@ class PrepareActionRunner:
     config: LemattConfig
     _processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
 
-    def prepare_domain(self, domain: str, domain_actions: dict) -> list[subprocess.Popen]:
+    def prepare_domain(self, domain: str, domain_actions: DomainActions) -> list[subprocess.Popen]:
         """Run prepare actions for a domain before cert request.
 
         Args:
             domain: The domain to prepare.
-            domain_actions: Dictionary mapping domains to their action configs.
+            domain_actions: DomainActions container with action configs.
 
         Returns:
             List of running Popen processes that must be killed after cert request.
@@ -58,13 +60,13 @@ class PrepareActionRunner:
         processes: list[subprocess.Popen] = []
 
         # Get actions for this domain (or default)
-        actions = domain_actions.get(domain, domain_actions.get("default", {}))
-        every_actions = domain_actions.get("every", {})
+        actions = domain_actions.get_for_domain(domain)
+        every_actions = domain_actions.every
 
-        def run_prepare(acts: dict) -> None:
-            if "prepare" not in acts:
+        def run_prepare(action_config: ActionConfig | None) -> None:
+            if action_config is None or not action_config.prepare_commands:
                 return
-            for cmd in acts["prepare"]:
+            for cmd in action_config.prepare_commands:
                 cmd = cmd.replace("DOMAIN", domain)
                 if self.config.is_dry_run:
                     logger.info(f"[DRY-RUN] Would run prepare: {cmd}")
@@ -142,8 +144,6 @@ class CertificateManager:
             update: If True, always log even in cron mode.
         """
         if not message:
-            if not self.config.is_cron:
-                print("")
             return
 
         prefix = "[TEST] " if self.config.is_test else "> "
@@ -388,14 +388,14 @@ subjectAltName={san_config}"""
         self,
         domain_config: DomainConfig,
         key_type: KeyType,
-        domain_actions: dict,
+        domain_actions: DomainActions,
     ) -> CertificateResult:
         """Process a single domain for certificate renewal.
 
         Args:
             domain_config: The domain configuration.
             key_type: Type of key (RSA or EC).
-            domain_actions: Dictionary of domain-specific actions.
+            domain_actions: DomainActions container with action configs.
 
         Returns:
             CertificateResult with the operation outcome.
@@ -534,88 +534,146 @@ subjectAltName={san_config}"""
     def _check_ocsp_requirement(
         self,
         domain_config: DomainConfig,
-        domain_actions: dict,
+        domain_actions: DomainActions,
     ) -> bool:
         """Check if OCSP stapling is required for a domain.
 
         Args:
             domain_config: The domain configuration.
-            domain_actions: Dictionary of domain-specific actions.
+            domain_actions: DomainActions container with action configs.
 
         Returns:
             True if OCSP stapling is required.
         """
+        # Check domain-level OCSP setting first (from domains file)
+        if domain_config.ocsp_staple_required:
+            return True
 
-        def get_ocsp(domain: str) -> bool:
-            if domain in domain_actions:
-                return domain_actions[domain].get("ocspStapleRequired", False)
-            return domain_actions.get("default", {}).get("ocspStapleRequired", False)
-
-        # All domains must have the same OCSP requirement
-        first_ocsp = get_ocsp(domain_config.primary_domain)
+        # Fall back to action-level OCSP setting
+        first_ocsp = domain_actions.get_ocsp_required(domain_config.primary_domain)
         for domain in domain_config.san_domains:
-            if get_ocsp(domain) != first_ocsp:
+            if domain_actions.get_ocsp_required(domain) != first_ocsp:
                 raise ValueError(
                     f"All SAN domains must have same OCSP config: {domain_config.all_domains}"
                 )
         return first_ocsp
 
-    def show_status(self, domains: Sequence[DomainConfig]) -> None:
-        """Display status of all configured certificates.
+    def get_status_data(self, domains: Sequence[DomainConfig]) -> list[dict]:
+        """Get certificate status as structured data.
 
         Args:
             domains: List of domain configurations.
+
+        Returns:
+            List of status dictionaries for each certificate.
         """
-        print("\n" + "=" * 80)
-        print("CERTIFICATE STATUS REPORT")
-        if HAS_CRYPTOGRAPHY:
-            print("(Using native cryptography library)")
-        else:
-            print("(Using openssl subprocess - install 'cryptography' for better performance)")
-        print("=" * 80)
-        print(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
-        print("-" * 80)
+        results: list[dict] = []
 
         for domain_config in domains:
             for key_type in [KeyType.RSA, KeyType.EC]:
                 cert_path = self.config.get_cert_path(domain_config, key_type)
                 cert_info = get_certificate_info(cert_path)
 
+                entry: dict = {
+                    "domain": domain_config.primary_domain,
+                    "san_domains": domain_config.san_domains,
+                    "key_type": key_type.name.lower(),
+                    "cert_path": cert_path,
+                    "exists": cert_info.exists,
+                }
+
                 if not cert_info.exists:
-                    status = "⚠️  MISSING"
-                    expires_str = "N/A"
-                    days_left = "N/A"
+                    entry["status"] = "missing"
+                    entry["expires"] = None
+                    entry["days_until_expiry"] = None
                 elif cert_info.parse_error:
-                    status = "⚠️  PARSE ERROR"
-                    expires_str = "Unknown"
-                    days_left = "?"
+                    entry["status"] = "parse_error"
+                    entry["parse_error"] = cert_info.parse_error
+                    entry["expires"] = None
+                    entry["days_until_expiry"] = None
                 elif cert_info.not_after:
                     days = cert_info.days_until_expiry
-                    expires_str = cert_info.not_after.strftime("%Y-%m-%d")
-                    days_left = str(days) if days is not None else "?"
+                    entry["expires"] = cert_info.not_after.isoformat()
+                    entry["days_until_expiry"] = days
 
                     if cert_info.is_expired:
-                        status = "❌ EXPIRED"
+                        entry["status"] = "expired"
                     elif days is not None and days < 7:
-                        status = "🔴 CRITICAL"
+                        entry["status"] = "critical"
                     elif days is not None and days < 30:
-                        status = "🟡 RENEW SOON"
+                        entry["status"] = "renew_soon"
                     else:
-                        status = "✅ OK"
+                        entry["status"] = "ok"
                 else:
-                    status = "⚠️  UNKNOWN"
-                    expires_str = "Unknown"
-                    days_left = "?"
+                    entry["status"] = "unknown"
+                    entry["expires"] = None
+                    entry["days_until_expiry"] = None
 
-                domain_with_type = f"{domain_config} ({key_type.name})"
-                print(f"{domain_with_type:<40} {expires_str:<20} {days_left:<12} {status}")
+                results.append(entry)
 
-        print("=" * 80 + "\n")
+        return results
+
+    def show_status(self, domains: Sequence[DomainConfig], json_output: bool = False) -> dict | None:
+        """Display status of all configured certificates.
+
+        Args:
+            domains: List of domain configurations.
+            json_output: If True, return data dict instead of printing.
+
+        Returns:
+            Status data dict if json_output is True, otherwise None.
+        """
+        status_data = self.get_status_data(domains)
+
+        if json_output:
+            return {
+                "certificates": status_data,
+                "summary": {
+                    "total": len(status_data),
+                    "ok": sum(1 for s in status_data if s["status"] == "ok"),
+                    "renew_soon": sum(1 for s in status_data if s["status"] == "renew_soon"),
+                    "critical": sum(1 for s in status_data if s["status"] == "critical"),
+                    "expired": sum(1 for s in status_data if s["status"] == "expired"),
+                    "missing": sum(1 for s in status_data if s["status"] == "missing"),
+                },
+                "using_native_crypto": HAS_CRYPTOGRAPHY,
+            }
+
+        # Human-readable output
+        logger.info("=" * 80)
+        logger.info("CERTIFICATE STATUS REPORT")
+        if HAS_CRYPTOGRAPHY:
+            logger.info("(Using native cryptography library)")
+        else:
+            logger.info("(Using openssl subprocess - install 'cryptography' for better performance)")
+        logger.info("=" * 80)
+        logger.info(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
+        logger.info("-" * 80)
+
+        status_icons = {
+            "ok": "✅ OK",
+            "renew_soon": "🟡 RENEW SOON",
+            "critical": "🔴 CRITICAL",
+            "expired": "❌ EXPIRED",
+            "missing": "⚠️  MISSING",
+            "parse_error": "⚠️  PARSE ERROR",
+            "unknown": "⚠️  UNKNOWN",
+        }
+
+        for entry in status_data:
+            domain_with_type = f"{entry['domain']} ({entry['key_type'].upper()})"
+            expires_str = entry["expires"][:10] if entry["expires"] else "N/A"
+            days_left = str(entry["days_until_expiry"]) if entry["days_until_expiry"] is not None else "N/A"
+            status = status_icons.get(entry["status"], "❓ UNKNOWN")
+            logger.info(f"{domain_with_type:<40} {expires_str:<20} {days_left:<12} {status}")
+
+        logger.info("=" * 80)
+        return None
 
     def process_all_domains(
         self,
         domains: Sequence[DomainConfig],
-        domain_actions: dict,
+        domain_actions: DomainActions,
     ) -> RenewalSummary:
         """Process all domains for certificate renewal.
 

@@ -115,6 +115,108 @@ class ActionConfig:
             or self.update_commands
         )
 
+    def to_dict(self) -> dict[str, object]:
+        """Convert to dictionary for backward compatibility."""
+        return {
+            "actionName": self.name,
+            "prepare": self.prepare_commands,
+            "uploadCerts": self.upload_certs_commands,
+            "uploadKeys": self.upload_keys_commands,
+            "update": self.update_commands,
+            "ocspStapleRequired": self.ocsp_staple_required,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object], name: str = "default") -> ActionConfig:
+        """Create ActionConfig from dictionary."""
+        return cls(
+            name=str(data.get("actionName", name)),
+            prepare_commands=list(data.get("prepare", [])),  # type: ignore[arg-type]
+            upload_certs_commands=list(data.get("uploadCerts", [])),  # type: ignore[arg-type]
+            upload_keys_commands=list(data.get("uploadKeys", [])),  # type: ignore[arg-type]
+            update_commands=list(data.get("update", [])),  # type: ignore[arg-type]
+            ocsp_staple_required=bool(data.get("ocspStapleRequired", False)),
+        )
+
+
+@dataclass
+class DomainActions:
+    """Container for all domain action configurations.
+
+    This replaces the arbitrary dict[str, dict] pattern with a proper dataclass.
+    """
+
+    default: ActionConfig = field(default_factory=lambda: ActionConfig(name="default"))
+    every: ActionConfig | None = None
+    domain_configs: dict[str, ActionConfig] = field(default_factory=dict)
+
+    def get_for_domain(self, domain: str) -> ActionConfig:
+        """Get the action configuration for a domain."""
+        return self.domain_configs.get(domain, self.default)
+
+    def get_ocsp_required(self, domain: str) -> bool:
+        """Get OCSP stapling requirement for a domain."""
+        config = self.get_for_domain(domain)
+        return config.ocsp_staple_required
+
+    def all_action_names(self) -> dict[str, ActionConfig]:
+        """Get all named action configurations."""
+        result: dict[str, ActionConfig] = {"default": self.default}
+        if self.every:
+            result["every"] = self.every
+        for _domain, config in self.domain_configs.items():
+            if config.name not in result:
+                result[config.name] = config
+        return result
+
+
+@dataclass
+class WorkerResult:
+    """Result from a certificate worker process.
+
+    This is a serializable dataclass used for IPC between the main process
+    and worker processes. It replaces the arbitrary dict pattern.
+    """
+
+    domain: str
+    key_type: str
+    success: bool
+    renewed: bool
+    cert_path: str | None = None
+    key_path: str | None = None
+    error_message: str | None = None
+    all_domains: list[str] = field(default_factory=list)
+    exception: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert to dictionary for process serialization."""
+        return {
+            "domain": self.domain,
+            "key_type": self.key_type,
+            "success": self.success,
+            "renewed": self.renewed,
+            "cert_path": self.cert_path,
+            "key_path": self.key_path,
+            "error_message": self.error_message,
+            "all_domains": self.all_domains,
+            "exception": self.exception,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> WorkerResult:
+        """Create WorkerResult from dictionary."""
+        return cls(
+            domain=str(data["domain"]),
+            key_type=str(data["key_type"]),
+            success=bool(data["success"]),
+            renewed=bool(data["renewed"]),
+            cert_path=data.get("cert_path") if data.get("cert_path") else None,  # type: ignore[arg-type]
+            key_path=data.get("key_path") if data.get("key_path") else None,  # type: ignore[arg-type]
+            error_message=data.get("error_message") if data.get("error_message") else None,  # type: ignore[arg-type]
+            all_domains=list(data.get("all_domains", [])),  # type: ignore[arg-type]
+            exception=data.get("exception") if data.get("exception") else None,  # type: ignore[arg-type]
+        )
+
 
 @dataclass
 class LemattConfig:
