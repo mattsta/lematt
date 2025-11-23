@@ -196,31 +196,45 @@ class ActionRunner:
         self,
         command: str,
         shell: bool = True,
+        action_type: str = "CMD",
     ) -> subprocess.CompletedProcess | None:
-        """Run a command with logging.
+        """Run a command with logging and execution confirmation.
 
         Args:
             command: The command to run.
             shell: Whether to run in shell mode.
+            action_type: Type of action for logging (uploadCerts, uploadKeys, update).
 
         Returns:
             CompletedProcess result or None on failure.
         """
-        self.log(f"Running: {command}", "CMD", update=True)
+        self.log(f"[{action_type}] Running: {command}", "action", update=True)
 
         if self.config.is_dry_run:
             self.log(f"[DRY-RUN] Would run: {command}", "action", update=True)
             return None
 
         try:
-            return subprocess.run(
+            result = subprocess.run(
                 command,
                 shell=shell,
                 check=True,
                 capture_output=True,
+                text=True,
             )
+            self.log(f"[{action_type}] SUCCESS: {command}", "action", update=True)
+            return result
         except subprocess.CalledProcessError as e:
-            self.log(f"Command failed: {e}", "ERROR", update=True)
+            self.log(
+                f"[{action_type}] FAILED: {command} - Exit code {e.returncode}",
+                "ERROR",
+                update=True,
+            )
+            if e.stderr:
+                self.log(f"[{action_type}] stderr: {e.stderr[:500]}", "ERROR", update=True)
+            return None
+        except OSError as e:
+            self.log(f"[{action_type}] OS ERROR: {command} - {e}", "ERROR", update=True)
             return None
 
     def process_updated_certs(
@@ -329,20 +343,20 @@ class ActionRunner:
         if "uploadCerts" in actions:
             for upload in actions["uploadCerts"]:
                 cmd = upload.replace("CERTS", replace_cert)
-                self.run_command(cmd)
+                self.run_command(cmd, action_type="uploadCerts")
 
         # Run upload keys
         if "uploadKeys" in actions:
             for upload in actions["uploadKeys"]:
                 cmd = upload.replace("KEYS", replace_key)
-                self.run_command(cmd)
+                self.run_command(cmd, action_type="uploadKeys")
 
-        # Run update commands
+        # Run update commands (service reloads, etc.)
         if "update" in actions:
             for action in actions["update"]:
                 action = action.replace("DOMAINS_CN", replace_domains_cn)
                 action = action.replace("DOMAINS_ALL", replace_domains_all)
-                self.run_command(action)
+                self.run_command(action, action_type="update")
 
     @staticmethod
     def _sort_by_domain(domain: str) -> tuple[str, ...]:
