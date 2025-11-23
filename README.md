@@ -16,6 +16,10 @@ A high-performance, type-safe certificate management system for automated Let's 
 - **Systemd Integration**: One-command timer installation with security hardening
 - **Health Checks**: Certificate expiry monitoring with Prometheus metrics export
 - **Multi-Channel Alerting**: Email, Slack, Discord, PagerDuty, ntfy, and custom notifications
+- **Interactive Dashboard**: Live-updating terminal dashboard with real-time certificate status
+- **Comprehensive Reports**: Certificate inventory, renewal schedules, and configuration summaries
+- **Contextual Help System**: Detailed, searchable help for all features and commands
+- **Rich Terminal Output**: Beautiful tables, progress bars, tree views, and color-coded status
 
 ## Quick Start
 
@@ -107,7 +111,11 @@ lematt/
 ├── log.py            # Loguru-based structured logging
 ├── systemd.py        # Systemd timer/service generation and installation
 ├── health.py         # Certificate health checking and monitoring
-└── notifications.py  # Multi-channel alerting (email, Slack, PagerDuty, etc.)
+├── notifications.py  # Multi-channel alerting (email, Slack, PagerDuty, etc.)
+├── display.py        # Rich terminal display components (tables, progress, trees)
+├── dashboard.py      # Interactive live-updating dashboard
+├── help.py           # Contextual help system with searchable topics
+└── reports.py        # Comprehensive report generation (JSON, Markdown, console)
 ```
 
 ### Processing Flow
@@ -524,6 +532,9 @@ usage: lematt [-h] (--prod | --test) [--cron] [--parallel N] [--config PATH]
               [--health-check] [--check-live] [--warning-days N]
               [--critical-days N] [--prometheus] [--write-health PATH]
               [--init-notifications] [--test-notification]
+              [--dashboard] [--dashboard-refresh SECONDS] [--dashboard-compact]
+              [--report] [--report-output PATH] [--report-format FORMAT]
+              [--help-topic [TOPIC]] [--help-search QUERY]
 
 Mode:
   --prod              Use production Let's Encrypt endpoint
@@ -562,6 +573,16 @@ Health Checks:
 Notifications:
   --init-notifications Create example notification config
   --test-notification  Send a test notification
+
+Interactive UI:
+  --dashboard          Launch interactive certificate dashboard
+  --dashboard-refresh  Dashboard refresh interval in seconds (default: 5)
+  --dashboard-compact  Use compact display mode for dashboard
+  --report             Generate comprehensive certificate report
+  --report-output      Save report to file (auto-detects format)
+  --report-format      Report format: console, json, markdown
+  --help-topic         Show detailed help for a topic (list all if no arg)
+  --help-search        Search help topics for a keyword
 ```
 
 ---
@@ -984,6 +1005,208 @@ lematt_certificates_total{status="critical"} 0
 lematt --prod --health-check 2>/dev/null
 exit $?
 ```
+
+---
+
+## Interactive Dashboard
+
+lematt includes an interactive terminal dashboard for real-time certificate monitoring.
+
+### Launch Dashboard
+
+```bash
+# Launch interactive dashboard
+lematt --test --dashboard
+
+# Custom refresh interval (default: 5 seconds)
+lematt --test --dashboard --dashboard-refresh 10
+
+# Compact display mode
+lematt --test --dashboard --dashboard-compact
+```
+
+### Dashboard Features
+
+- **Live Updates**: Auto-refreshing certificate status every 5 seconds
+- **Multiple Views**: Overview, Certificates, Health Details, Activity Log
+- **Status Sidebar**: Quick health summary with certificate counts
+- **Keyboard Controls**: Navigate and control the dashboard interactively
+
+### Keyboard Controls
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit dashboard |
+| `r` | Force refresh |
+| `p` | Pause/resume auto-refresh |
+| `c` | Toggle compact mode |
+| `1` | Switch to Overview view |
+| `2` | Switch to Certificates view |
+| `3` | Switch to Health Details view |
+| `4` | Switch to Activity Log view |
+
+### Dashboard Views
+
+| View | Description |
+|------|-------------|
+| **Overview** | Health summary with overall status and quick stats |
+| **Certificates** | Detailed certificate table with expiry information |
+| **Health Details** | Extended health information with messages and issuer |
+| **Activity Log** | Recent dashboard activity and refresh timestamps |
+
+---
+
+## Summary Reports
+
+Generate comprehensive reports about certificate status, inventory, and renewal schedules.
+
+### Generate Reports
+
+```bash
+# Display report in terminal
+lematt --test --report
+
+# Save as JSON
+lematt --test --report --report-output report.json
+
+# Save as Markdown
+lematt --test --report --report-output report.md
+
+# Specify format explicitly
+lematt --test --report --report-format markdown --report-output status.md
+```
+
+### Report Contents
+
+Reports include:
+
+1. **Health Summary**: Overall system status with certificate counts
+2. **Certificate Inventory**: All certificates with status, expiry, and paths
+3. **Renewal Schedule**: Upcoming renewals sorted by priority
+4. **Configuration Summary**: Key settings and domain configuration
+5. **Actions Summary**: Configured deployment actions
+
+### Report Formats
+
+| Format | Extension | Description |
+|--------|-----------|-------------|
+| `console` | (none) | Rich terminal display with tables and colors |
+| `json` | `.json` | Machine-readable JSON for automation |
+| `markdown` | `.md` | Human-readable Markdown for documentation |
+
+### Renewal Schedule Priorities
+
+| Priority | Meaning |
+|----------|---------|
+| `immediate` | Overdue for renewal |
+| `soon` | Renewal due within 7 days |
+| `scheduled` | Renewal due within 14 days |
+| `ok` | No immediate action needed |
+
+---
+
+## Contextual Help System
+
+lematt includes a comprehensive help system with detailed documentation for all features.
+
+### View Help Topics
+
+```bash
+# List all help topics
+lematt --test --help-topic
+
+# View specific topic
+lematt --test --help-topic run
+lematt --test --help-topic dashboard
+lematt --test --help-topic configuration
+lematt --test --help-topic systemd
+lematt --test --help-topic troubleshooting
+
+# Search help topics
+lematt --test --help-search certificate
+lematt --test --help-search notification
+```
+
+### Available Help Topics
+
+| Topic | Category | Description |
+|-------|----------|-------------|
+| `run` | Commands | Execute certificate renewal |
+| `status` | Commands | Check certificate status |
+| `health` | Commands | Health check system |
+| `dashboard` | Commands | Interactive dashboard |
+| `config` | Commands | Configuration commands |
+| `configuration` | Configuration | Configuration file format |
+| `domains` | Configuration | Domain configuration |
+| `actions` | Actions | Deployment actions |
+| `systemd` | Systemd | Systemd integration |
+| `monitoring` | Monitoring | Monitoring integration |
+| `notifications` | Monitoring | Notification system |
+| `troubleshooting` | Troubleshooting | Common issues and solutions |
+
+### Help Categories
+
+- **Commands**: CLI command documentation with options and examples
+- **Configuration**: Configuration file format and options
+- **Actions**: Deployment action configuration
+- **Systemd**: Timer and service setup
+- **Monitoring**: Integration with monitoring systems
+- **Troubleshooting**: Common issues and solutions
+
+---
+
+## Rich Terminal Display
+
+lematt uses the [rich](https://github.com/Textualize/rich) library for beautiful terminal output.
+
+### Features
+
+- **Color-coded Status**: Green for healthy, yellow for warnings, red for critical
+- **Status Icons**: Visual indicators for certificate health (✓ ⚠ ✗)
+- **Tables**: Clean, readable tables for certificate listings
+- **Progress Bars**: Visual progress during batch operations
+- **Tree Views**: Hierarchical display of configuration and domains
+- **Panels**: Framed information panels with titles
+
+### Display Components
+
+```python
+from lematt import (
+    console,
+    print_banner,
+    print_success,
+    print_warning,
+    print_error,
+    print_info,
+    create_certificate_table,
+    create_health_summary,
+    create_domain_tree,
+)
+
+# Print status messages
+print_success("Certificate renewed successfully")
+print_warning("Certificate expires in 10 days")
+print_error("Failed to renew certificate")
+print_info("Checking certificate status...")
+
+# Create display components
+table = create_certificate_table(certificates)
+console.print(table)
+
+tree = create_domain_tree(domains)
+console.print(tree)
+```
+
+### Status Styles
+
+| Status | Color | Icon |
+|--------|-------|------|
+| Healthy/OK/Success | Green | ✓ |
+| Warning/Expiring | Yellow | ⚠ |
+| Critical/Error/Expired | Red | ✗ |
+| Unknown | Gray | ? |
+| Pending | Gray | ○ |
+| Running | White | ◉ |
 
 ---
 

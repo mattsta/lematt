@@ -19,6 +19,15 @@ from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import setup_logging
 from lematt.manager import CertificateManager
 
+# Rich display imports (lazy loaded for commands that need them)
+HAS_RICH = True
+try:
+    from rich.console import Console
+    console = Console()
+except ImportError:
+    HAS_RICH = False
+    console = None
+
 
 def load_domains(config_base: str) -> list[DomainConfig]:
     """Load domain configuration from the domains file.
@@ -358,6 +367,62 @@ def main() -> int:
         help="Send a test notification to verify configuration",
     )
 
+    # Interactive UI features
+    ui_group = parser.add_argument_group("interactive UI")
+    ui_group.add_argument(
+        "--dashboard",
+        dest="dashboard",
+        action="store_true",
+        help="Launch interactive dashboard with live certificate status",
+    )
+    ui_group.add_argument(
+        "--dashboard-refresh",
+        dest="dashboard_refresh",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="Dashboard refresh interval in seconds (default: 5)",
+    )
+    ui_group.add_argument(
+        "--dashboard-compact",
+        dest="dashboard_compact",
+        action="store_true",
+        help="Use compact display mode for dashboard",
+    )
+    ui_group.add_argument(
+        "--report",
+        dest="report",
+        action="store_true",
+        help="Generate comprehensive certificate report",
+    )
+    ui_group.add_argument(
+        "--report-output",
+        dest="report_output",
+        metavar="PATH",
+        help="Save report to file (auto-detects format from extension)",
+    )
+    ui_group.add_argument(
+        "--report-format",
+        dest="report_format",
+        choices=["console", "json", "markdown"],
+        default="console",
+        help="Report output format (default: console)",
+    )
+    ui_group.add_argument(
+        "--help-topic",
+        dest="help_topic",
+        metavar="TOPIC",
+        nargs="?",
+        const="",
+        help="Show detailed help for a topic (use without argument to list topics)",
+    )
+    ui_group.add_argument(
+        "--help-search",
+        dest="help_search",
+        metavar="QUERY",
+        help="Search help topics for a keyword",
+    )
+
     args = parser.parse_args()
 
     # Set up logging
@@ -374,6 +439,24 @@ def main() -> int:
             return 1
         create_example_toml(toml_path)
         logger.info("Edit the file and customize for your environment")
+        return 0
+
+    # Handle --help-topic: show contextual help
+    if args.help_topic is not None:
+        if not HAS_RICH:
+            logger.error("Rich library required for help display. Install with: pip install rich")
+            return 1
+        from lematt.help import print_help
+        print_help(args.help_topic if args.help_topic else None)
+        return 0
+
+    # Handle --help-search: search help topics
+    if args.help_search:
+        if not HAS_RICH:
+            logger.error("Rich library required for help display. Install with: pip install rich")
+            return 1
+        from lematt.help import search_help
+        search_help(args.help_search)
         return 0
 
     # Handle --init-notifications: create notification config
@@ -605,6 +688,117 @@ def main() -> int:
             return 2
         elif health.status == HealthStatus.WARNING:
             return 1
+        return 0
+
+    # Handle --dashboard: launch interactive dashboard
+    if args.dashboard:
+        if not HAS_RICH:
+            logger.error("Rich library required for dashboard. Install with: pip install rich")
+            return 1
+
+        from lematt.dashboard import Dashboard, DashboardConfig
+        from lematt.health import HealthChecker
+
+        domains = load_domains(config_base)
+
+        # Build config for health checking
+        rsa_bits = int(config["keyBitsRSA"])
+        curve = config["curve"]
+        dash_config = LemattConfig(
+            config_base=config_base,
+            challenge_dir=config["challengeDropDir"],
+            account_key=config["accountKey"],
+            rsa_key_bits=rsa_bits,
+            ec_curve=curve,
+            rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
+            curve_tag=config.get("curveTag", curve),
+            is_test=args.is_test,
+            domains=domains,
+        )
+
+        health_checker = HealthChecker(
+            config=dash_config,
+            warning_days=args.warning_days,
+            critical_days=args.critical_days,
+        )
+
+        dashboard_config = DashboardConfig(
+            refresh_interval=args.dashboard_refresh,
+            compact_mode=args.dashboard_compact,
+        )
+
+        dashboard = Dashboard(
+            config=dashboard_config,
+            health_checker=health_checker,
+        )
+
+        logger.info("Launching interactive dashboard...")
+        logger.info("Press 'q' to quit, 'r' to refresh, 'p' to pause")
+        try:
+            dashboard.run()
+        except KeyboardInterrupt:
+            pass
+        return 0
+
+    # Handle --report: generate certificate report
+    if args.report:
+        if not HAS_RICH:
+            logger.error("Rich library required for reports. Install with: pip install rich")
+            return 1
+
+        from lematt.health import HealthChecker
+        from lematt.reports import Report, ReportConfig, generate_full_report
+
+        domains = load_domains(config_base)
+
+        # Build config
+        rsa_bits = int(config["keyBitsRSA"])
+        curve = config["curve"]
+        report_lematt_config = LemattConfig(
+            config_base=config_base,
+            challenge_dir=config["challengeDropDir"],
+            account_key=config["accountKey"],
+            rsa_key_bits=rsa_bits,
+            ec_curve=curve,
+            rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
+            curve_tag=config.get("curveTag", curve),
+            is_test=args.is_test,
+            domains=domains,
+        )
+
+        # Get health data for report
+        health_checker = HealthChecker(
+            config=report_lematt_config,
+            warning_days=args.warning_days,
+            critical_days=args.critical_days,
+        )
+        health = health_checker.check_all_certificates(domains)
+
+        # Load actions for report
+        action_runner = ActionRunner(report_lematt_config)
+        try:
+            action_runner.load_actions()
+            report_lematt_config.actions = action_runner.actions.configs
+        except Exception:
+            pass  # Actions not required for report
+
+        # Determine output format
+        output_format = args.report_format
+        output_path = Path(args.report_output) if args.report_output else None
+
+        # Auto-detect format from extension if path provided
+        if output_path:
+            if output_path.suffix == ".json":
+                output_format = "json"
+            elif output_path.suffix in (".md", ".markdown"):
+                output_format = "markdown"
+
+        generate_full_report(
+            config=report_lematt_config,
+            health=health,
+            output_path=output_path,
+            format=output_format,
+        )
         return 0
 
     # Handle --test-notification: send test notification
