@@ -1,128 +1,860 @@
-Matt's Let's Encrypt Automation
-===============================
+# lematt - Matt's Let's Encrypt Automation
 
-yes, let's!
+A high-performance, type-safe certificate management system for automated Let's Encrypt certificate provisioning, renewal, and deployment.
 
-## Background
-### What Is It?
+## Features
 
-`lematt.py` is a self-contained certificate management system allowing you to automatically:
+- **Parallel Processing**: Process hundreds of certificates concurrently with configurable worker pools
+- **Dual Key Support**: Generate both RSA and EC (ECDSA) certificates for each domain
+- **SAN/SNI/UCC Support**: Up to 100 domain names per certificate
+- **Workflow Automation**: Pre-request prepare actions and post-renewal deployment triggers
+- **Multiple Output Formats**: Human-readable tables or JSON for monitoring integration
+- **Modern Python**: Type-safe dataclasses, Python 3.14+, native cryptography support
+- **TOML Configuration**: Modern config format with native list support (INI still supported)
+- **OCSP Must-Staple**: Per-domain OCSP stapling configuration
+- **Test Mode**: Isolated staging environment to validate configuration safely
 
-- generate and renew RSA and EC LE certificates
-    - including: optional pre-sign triggers per-domain in case you need to
-    start up a web server or punch a hole in a firewall for validation
-- provision certs (and CSRs/keys) concurrently using `--parallel`
-    - provides 600% speedup over operating sequentially
-    - provision 50 certificates in 20 seconds (10 workers) instead of 2 minutes (1 worker)
-- provision RSA and EC keys
-- generate RSA and EC CSRs
-    - includes full SAN/SNI/UCC capability for up to 100 domain names per cert
-- copy certs and keys to multiple places when renewed
-    - unlimited copy destinations can be triggered per domain name (with a default fallback)
-        - copy locally
-        - copy to any number of remote servers (via `rsync`)
-- reload services based on the domain(s) inside renewed certs
-    - unlimited update triggers can fire based on certificate domain names (with a default fallback)
-        - reload local services
-        - reload remote services with ssh connections
-    - automatically deduplicates service update requests, so if you have 30
-    web certificates update at the same time, only one reload will be executed.
-- run certificate updates as a dedicated certificate-maint user
-    - stop running your updates as root. you know its bad.
-- continuously rotate keys and certificates as fast as every 3.5 days
-    - why 3.5 days? Because LE rate limits are 5 duplicate certs per week.
-        - requesting 1 RSA cert and 1 EC cert count as 2 rate limit slots, so you can run the full cycle only twice every 7 days, giving us 3.5 days between issues to stay under the rate limits.
-        - whether it's wise or safe to always remain at your maximum rate limit capacity is up to you. See config option `generateNewCertsAfterDays`.
-- end-to-end test your configuration, copy, pre-sign, and post-update actions using the LE staging endpoint with isolated test-specific keys, CSRs, and certs so you don't burn through production rate limits or overwrite production keys and certs with test data.
+## Quick Start
 
-`lematt` does not change any part of your system outside of creating new keys, CSRs, and signed certificates, then running triggers up manually specify after updates. You must already have a web server where LE can discover verification challenges under the URI `/.well-known/acme-challenge/`.
+### Installation
 
-### Why Is It?
+```bash
+# Clone the repository
+git clone https://github.com/mattsta/lematt
+cd lematt
 
-Consider this a "paying off technical debt" project. My original LE automation
-was a 40 line shell script looping over domains to generate RSA keys, CSRs,
-certs from LE, then copying keys/certs and reloading services. The 40 line shell script
-worked great for two and a half years, but now it has been upgraded to a
-800+ line Python program with improved reliability, enhanced functionality, plus
-general usability across different installations through better config management and
-stable update triggers.
+# Install with uv (recommended)
+uv sync
 
-lematt can:
+# Or install with pip
+pip install -e .
 
-- generate RSA _and_ EC keys, CSRs, and request signed certs from LE
-- generate SAN/SNI/UCC CSRs
-	- LE allows up to 100 domain names per individual certificate
-- trigger pre-LE-request actions
-	-  e.g. start a web server on a remote host to accept the challenge, but just for the 3 seconds it takes to validate challenge ownership
-- copy only keys and certs relevant to services on a single machine
-- reload only related services when certs get renewed
-- test against LE staging endpoint with dedicated test directories and test naming for keys, CSRs, and certs to protect against wiping away production keys and certs during testing
+# Optional: Install native crypto for ~5x performance
+uv sync --extra crypto
+# or: pip install -e ".[crypto]"
+```
+
+### Generate Example Configuration
+
+```bash
+# Create example TOML config (recommended for new installations)
+lematt --test --init-toml
+
+# Or use the existing INI config files in conf/
+```
+
+### Validate Configuration
+
+```bash
+# Validate without processing any certificates
+lematt --test --validate-config
+
+# List all configured domains
+lematt --test --list-domains
+
+# Check certificate status
+lematt --test --status
+```
+
+### Run Certificate Management
+
+```bash
+# Test mode (uses Let's Encrypt staging - always test first!)
+lematt --test
+
+# Production mode
+lematt --prod
+
+# With parallel processing (up to 10 workers)
+lematt --prod --parallel 5
+
+# Dry run to see what would happen
+lematt --prod --dry-run
+
+# Force renewal of all certificates
+lematt --prod --force-renew
+
+# Process single domain
+lematt --prod --domain example.com
+```
+
+---
+
+## Architecture
+
+### Design Principles
+
+1. **Error Isolation**: Individual certificate failures don't affect other certificates
+2. **Rate Limiting**: Built-in token bucket rate limiter respects Let's Encrypt API limits
+3. **Graceful Shutdown**: Clean cancellation on SIGINT/SIGTERM preserves partial progress
+4. **Type Safety**: All configuration and data structures use typed dataclasses
+5. **No Global State**: All components accept configuration through constructors
+
+### Component Overview
+
+```
+lematt/
+├── cli.py           # Command-line interface and argument parsing
+├── config.py        # Configuration dataclasses (LemattConfig, DomainConfig, etc.)
+├── config_loader.py # Unified INI/TOML configuration loading
+├── manager.py       # CertificateManager - core certificate operations
+├── executor.py      # CertificateExecutor - parallel processing with error isolation
+├── actions.py       # ActionRunner - pre/post certificate workflow execution
+├── crypto.py        # Key generation, CSR creation, certificate parsing
+└── log.py           # Loguru-based structured logging
+```
+
+### Processing Flow
+
+```
+1. Load Configuration (INI or TOML)
+        ↓
+2. Validate Configuration
+        ↓
+3. Load Domain List (with OCSP flags)
+        ↓
+4. For each domain + key type (RSA, EC):
+   a. Check if renewal needed
+   b. Run prepare actions (start temp servers, open ports)
+   c. Generate key (if needed)
+   d. Generate CSR (with OCSP Must-Staple if configured)
+   e. Request certificate from Let's Encrypt
+   f. Cleanup prepare actions
+        ↓
+5. Run post-renewal actions (upload, reload services)
+```
+
+---
+
+## Configuration
+
+lematt supports two configuration formats:
+
+- **TOML** (recommended): Modern format with native lists, better readability
+- **INI** (legacy): Original format, still fully supported
+
+### Configuration Files
+
+| File | Format | Purpose |
+|------|--------|---------|
+| `lematt.toml` | TOML | All-in-one modern config (domains + actions + settings) |
+| `lematt.conf` | INI | Global settings |
+| `domains` | Text | Domain list with optional OCSP flags |
+| `actions.conf` | INI | Pre/post certificate actions |
+
+lematt auto-detects format: if `lematt.toml` exists, it's used; otherwise falls back to INI files.
+
+---
+
+## TOML Configuration (Recommended)
+
+### Complete Example
+
+```toml
+# lematt.toml - Modern configuration format
+
+[config]
+# ACME challenge directory (served at /.well-known/acme-challenge/)
+challenge_dir = "/var/www/html/.well-known/acme-challenge"
+
+# Account key for Let's Encrypt
+# Generate with: openssl genrsa 4096 > account.key
+account_key = "/etc/lematt/account.key"
+
+# Renew certificates this many days before expiration
+reauthorize_days = 15
+
+# RSA key size (2048, 3072, or 4096)
+key_bits_rsa = 2048
+
+# EC curve (prime256v1, secp384r1, or secp521r1)
+ec_curve = "prime256v1"
+
+# Always generate new keys on renewal (enables key rotation)
+always_generate_new_keys = false
 
 
-### How Is It?
+# Domain Configurations
+# Each [[domains]] entry creates one certificate (RSA + EC)
 
-Pretty good, thanks for asking.
+[[domains]]
+primary = "example.com"
+sans = ["www", "mail", "api"]  # Shorthand expands to www.example.com, etc.
+ocsp_staple_required = false
 
+[[domains]]
+primary = "secure.example.com"
+ocsp_staple_required = true    # Enable OCSP Must-Staple
 
-## Usage
-
-For a longer writeup, see [Introducing lematt](https://matt.sh/lematt)
-
-### Running
-
-Run lematt by giving `lematt.py` one argument of either `--test` or `--prod` along with (optional) config filename if you aren't using the default location of `conf/`.
-
-### Configuring
-
-lematt has three config files:
-
-- `lematt.conf` describes global options for:
-    - how many days before expiration to renew certs
-    - your LE account key location
-    - directory to place LE challenge verification files
-    - how many bits to use for your RSA keys (default: 2048)
-    - which curve to use (default: prime256v1 (also known as secp256r1))
-- `domains` describes which domains to manage:
-    - each line will generate a new key and new certificate
-    - each line must start with a FQDN the LE server can contact
-    - you can add SAN/SNI/UCC domains by just listing them on the same line separated by spaces
-    - as shorthand, if you just list a subdomain without any '.', the first domain on the line will be appended to the subdomain (e.g. "mysite.com www" will make one SAN cert for "mysite.com" with altSubjectNames mysite.com,www.mysite.com)
-- `actions.conf` describes commands to run before and after requesting certs:
-    - section `[default]` applies to any domain without a specific override
-    - overrides are any number of named sections you create (not named `[default]`)
-        - overrides have a space-separated `domains` entry
-        - any domain updated in the `domains` entry will trigger the override actions
-            - `domains: mysite.com mail.mysite.com othersite.org`
-            - Note: `domains` only makes sense in an override section. It has no effect under `[default]`.
-    - actions for both `[default]` and override sections are:
-        - `update` - after a certificate is updated, run these commands
-            - `update: ["service nginx reload", "ssh mailserver-reload"]`
-        - `prepare` - before requesting the LE cert, run these commands (useful for starting a temporary web server or opening firewall ports temporarily; command will be killed after cert is issued)
-            - `prepare: ["ssh mailserver-openport http://central.validator.mysite.com"]`
-        - `uploadCerts` - runs when certs are updated or created.
-            - `CERTS` in your commands will be replaced with shell glob patterns
-            - `uploadCerts: ["rsync -avz CERTS cert-maintainer@mailserver:/etc/ssl/"]`
-        - `uploadKeys` - also runs when certs are updated or created.
-            - `KEYS` in your commands will be replaced with shell glob patterns
-            - `uploadKeys: ["rsync -avz KEYS cert-maintainer@mailserver:/etc/ssl/private/"]`
+[[domains]]
+primary = "cdn.example.com"
+sans = ["static.example.com", "assets.example.com"]  # Full FQDNs work too
 
 
-## More Docs
+# Action Configurations
 
-For a longer writeup, see [Introducing lematt](https://matt.sh/lematt)
+[actions.default]
+# Default actions for domains without specific overrides
+upload_certs = ["rsync -avz --chmod=F644 CERTS /etc/ssl/certs/"]
+upload_keys = ["rsync -avz --chmod=F640 KEYS /etc/ssl/private/"]
+update = ["systemctl reload nginx"]
 
-### Included
+[actions.every]
+# Actions that run for EVERY renewed certificate (in addition to others)
+update = ["/usr/local/bin/backup-certs.sh"]
 
-`lematt` includes [acme_tiny.py](https://github.com/diafygi/acme-tiny) and relies on system-provided `openssl` to generate private keys and CSRs.
+[actions.mail_servers]
+# Override for specific domains
+domains = ["mail.example.com", "smtp.example.com"]
+prepare = ["ssh mail-server 'systemctl start acme-responder'"]
+upload_certs = ["rsync -avz CERTS mail-server:/etc/ssl/certs/"]
+upload_keys = ["rsync -avz KEYS mail-server:/etc/ssl/private/"]
+update = [
+    "ssh mail-server 'systemctl reload postfix'",
+    "ssh mail-server 'systemctl reload dovecot'",
+]
+```
 
-## Contribute
+### TOML Key Reference
 
-### Things We Could Eventually Do
+#### `[config]` Section
 
-Want to help? Pick a task, create an issue saying you're working on it, set a deadline for yourself, then post your progress!
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `challenge_dir` | string | required | Directory for ACME challenge files |
+| `account_key` | string | required | Path to Let's Encrypt account key |
+| `reauthorize_days` | float | 15.0 | Days before expiry to renew |
+| `generate_new_certs_after_days` | float | 0.0 | Renew based on cert age (0 = disabled) |
+| `always_generate_new_keys` | bool | false | Generate new keys on each renewal |
+| `key_bits_rsa` | int | 2048 | RSA key size |
+| `ec_curve` | string | "prime256v1" | EC curve name |
+| `rsa_tag` | string | "rsa{bits}" | Filename tag for RSA certs |
+| `curve_tag` | string | "{curve}" | Filename tag for EC certs |
 
-- create (or find) a simple-ish python module to replace our openssl command usage (key generation, CSR generation with SANs) with [pyca/cryptography](https://cryptography.io/en/latest/)
-- refactor [acme_tiny](https://github.com/diafygi/acme-tiny) to use [pyca/cryptography](https://cryptography.io/en/latest/) too (we don't care about the imaginary "stay under 200 lines, even if we have to make them _really really really_ long while removing all easy-to-read visual whitespace" limits).
-- add actions.conf config ability to pick either dns-01 or http-01 challenge methods
-    - will require a minimal plugin architecture to talk to DNS APIs (available from other LE clients)
-    - DNS API integration would basically fire along side the current prepare hooks, but we need something other than `acme_tiny` (or a modification of it) to run the request since tiny only requests http challenges.
+#### `[[domains]]` Array
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `primary` | string | required | Primary domain name (CN) |
+| `sans` | list[string] | [] | Subject Alternative Names |
+| `ocsp_staple_required` | bool | false | Enable OCSP Must-Staple extension |
+
+#### `[actions.*]` Tables
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `domains` | list[string] | Domains using this action group (not for default/every) |
+| `prepare` | list[string] | Commands to run before cert request (killed after) |
+| `upload_certs` | list[string] | Commands to upload certificates (CERTS replaced) |
+| `upload_keys` | list[string] | Commands to upload private keys (KEYS replaced) |
+| `update` | list[string] | Commands to run after successful renewal |
+
+---
+
+## INI Configuration (Legacy)
+
+### lematt.conf
+
+```ini
+[config]
+# Renew this many days before expiration
+reauthorizeDays: 15
+
+# OR: Renew when cert is N days old (overrides reauthorizeDays)
+# generateNewCertsAfterDays: 7
+
+# ACME challenge directory
+challengeDropDir: /var/www/html/.well-known/acme-challenge
+
+# Account key path
+accountKey: /etc/lematt/account.key
+
+# Key configuration
+keyBitsRSA: 2048
+curve: prime256v1
+
+# Rotate keys on each renewal
+alwaysGenerateNewKeys: no
+```
+
+### domains
+
+```
+# Each line = one certificate
+# Format: primary_domain [san1] [san2] ... [+ocsp|-ocsp]
+
+# Basic single domain
+example.com
+
+# Domain with SANs (shorthand - "www" becomes "www.example.com")
+example.com www mail api
+
+# Domain with full FQDNs as SANs
+example.com www.example.com mail.example.com
+
+# Enable OCSP Must-Staple for this certificate
+secure.example.com +ocsp
+
+# Explicitly disable OCSP (default)
+legacy.example.com -ocsp
+
+# Complex example with multiple SANs and OCSP
+corp.example.com intranet hr payroll git wiki +ocsp
+```
+
+### actions.conf
+
+```ini
+# Default actions (applied when no override matches)
+[default]
+update: ["systemctl reload nginx"]
+uploadCerts: ["rsync -avz CERTS /etc/ssl/certs/"]
+uploadKeys: ["rsync -avz KEYS /etc/ssl/private/"]
+
+# Actions for EVERY certificate (in addition to default/override)
+[every]
+update: ["/usr/local/bin/backup-certs.sh"]
+
+# Override for specific domains
+[mail-servers]
+domains: mail.example.com smtp.example.com
+prepare: ["ssh mail-server 'systemctl start acme-responder'"]
+uploadCerts: ["rsync -avz CERTS mail-server:/etc/ssl/certs/"]
+uploadKeys: ["rsync -avz KEYS mail-server:/etc/ssl/private/"]
+update: ["ssh mail-server 'systemctl reload postfix'"]
+```
+
+---
+
+## Migration Guide: INI to TOML
+
+### Configuration Translation
+
+| INI (lematt.conf) | TOML (lematt.toml) |
+|-------------------|---------------------|
+| `reauthorizeDays: 15` | `reauthorize_days = 15` |
+| `challengeDropDir: /path` | `challenge_dir = "/path"` |
+| `accountKey: /path` | `account_key = "/path"` |
+| `keyBitsRSA: 2048` | `key_bits_rsa = 2048` |
+| `curve: prime256v1` | `ec_curve = "prime256v1"` |
+| `alwaysGenerateNewKeys: yes` | `always_generate_new_keys = true` |
+| `generateNewCertsAfterDays: 7` | `generate_new_certs_after_days = 7` |
+
+### Domains Translation
+
+**INI (domains file):**
+```
+example.com www mail +ocsp
+api.example.com
+```
+
+**TOML:**
+```toml
+[[domains]]
+primary = "example.com"
+sans = ["www", "mail"]
+ocsp_staple_required = true
+
+[[domains]]
+primary = "api.example.com"
+```
+
+### Actions Translation
+
+**INI (actions.conf):**
+```ini
+[default]
+update: ["systemctl reload nginx"]
+uploadCerts: ["rsync -avz CERTS /etc/ssl/"]
+
+[mail-override]
+domains: mail.example.com
+prepare: ["ssh mail start-responder"]
+update: ["ssh mail reload-postfix"]
+```
+
+**TOML:**
+```toml
+[actions.default]
+update = ["systemctl reload nginx"]
+upload_certs = ["rsync -avz CERTS /etc/ssl/"]
+
+[actions.mail_override]
+domains = ["mail.example.com"]
+prepare = ["ssh mail start-responder"]
+update = ["ssh mail reload-postfix"]
+```
+
+### Key Differences
+
+| Aspect | INI | TOML |
+|--------|-----|------|
+| Lists | JSON syntax: `["a", "b"]` | Native TOML: `["a", "b"]` |
+| Booleans | `yes`/`no` | `true`/`false` |
+| Key naming | camelCase | snake_case |
+| OCSP config | In domains file: `+ocsp` | In `[[domains]]`: `ocsp_staple_required = true` |
+| Domains | Separate file | Inline `[[domains]]` array |
+| Actions | Separate file | Inline `[actions.*]` tables |
+
+---
+
+## CLI Reference
+
+### Mode Selection (Required)
+
+```bash
+lematt --test    # Use Let's Encrypt staging endpoint (always test first!)
+lematt --prod    # Use Let's Encrypt production endpoint
+```
+
+### Information Commands
+
+```bash
+# Show certificate status
+lematt --test --status
+
+# Status as JSON (for monitoring systems)
+lematt --test --status --json
+
+# List all configured domains
+lematt --test --list-domains
+
+# List domains as JSON
+lematt --test --list-domains --json
+
+# Validate configuration only
+lematt --test --validate-config
+```
+
+### Processing Options
+
+```bash
+# Parallel processing (max 10 workers)
+lematt --prod --parallel 5
+
+# Process single domain
+lematt --prod --domain example.com
+
+# Force renewal regardless of expiration
+lematt --prod --force-renew
+
+# Dry run (show what would happen)
+lematt --prod --dry-run
+
+# Minimize output (for cron)
+lematt --prod --cron
+```
+
+### Configuration
+
+```bash
+# Use custom config path
+lematt --test --config /path/to/lematt.conf
+
+# Generate example TOML config
+lematt --test --init-toml
+
+# Verbose output
+lematt --test -v
+```
+
+### Complete Options
+
+```
+usage: lematt [-h] (--prod | --test) [--cron] [--parallel N] [--config PATH]
+              [-v] [--dry-run] [--status] [--json] [--list-domains]
+              [--validate-config] [--domain DOMAIN] [--force-renew]
+              [--init-toml]
+
+Options:
+  --prod              Use production Let's Encrypt endpoint
+  --test              Use staging Let's Encrypt endpoint
+  --cron              Minimize output (only errors and renewals)
+  --parallel N        Process N certificates in parallel (max 10)
+  --config PATH       Path to configuration file
+  -v, --verbose       Enable debug output
+  --dry-run           Show what would be done without changes
+  --status            Show certificate status and exit
+  --json              Output as JSON (use with --status or --list-domains)
+  --list-domains      List all configured domains and exit
+  --validate-config   Validate configuration without processing
+  --domain DOMAIN     Process only specified domain
+  --force-renew       Force renewal regardless of expiration
+  --init-toml         Create example lematt.toml and exit
+```
+
+---
+
+## JSON Output Examples
+
+### Certificate Status
+
+```bash
+lematt --test --status --json
+```
+
+```json
+{
+  "certificates": [
+    {
+      "domain": "example.com",
+      "san_domains": ["www.example.com"],
+      "key_type": "rsa",
+      "cert_path": "/path/to/cert.pem",
+      "exists": true,
+      "status": "ok",
+      "expires": "2024-06-15T12:00:00",
+      "days_until_expiry": 45
+    },
+    {
+      "domain": "example.com",
+      "san_domains": ["www.example.com"],
+      "key_type": "ec",
+      "cert_path": "/path/to/cert.pem",
+      "exists": true,
+      "status": "renew_soon",
+      "expires": "2024-05-10T12:00:00",
+      "days_until_expiry": 12
+    }
+  ],
+  "summary": {
+    "total": 4,
+    "ok": 2,
+    "renew_soon": 1,
+    "critical": 0,
+    "expired": 0,
+    "missing": 1
+  },
+  "using_native_crypto": true
+}
+```
+
+### Domain List
+
+```bash
+lematt --test --list-domains --json
+```
+
+```json
+[
+  {
+    "primary": "example.com",
+    "sans": ["www.example.com", "mail.example.com"],
+    "all_domains": ["example.com", "www.example.com", "mail.example.com"],
+    "ocsp_staple_required": false
+  },
+  {
+    "primary": "secure.example.com",
+    "sans": [],
+    "all_domains": ["secure.example.com"],
+    "ocsp_staple_required": true
+  }
+]
+```
+
+---
+
+## Workflow Actions
+
+### Action Types
+
+| Action | When | Variables | Purpose |
+|--------|------|-----------|---------|
+| `prepare` | Before cert request | `DOMAIN` | Start temp servers, open ports |
+| `upload_certs` | After successful renewal | `CERTS` | Copy certificates |
+| `upload_keys` | After successful renewal | `KEYS` | Copy private keys |
+| `update` | After successful renewal | `DOMAINS_CN`, `DOMAINS_ALL` | Reload services |
+
+### Variable Expansion
+
+| Variable | Expands To | Example |
+|----------|------------|---------|
+| `DOMAIN` | Current domain being prepared | `mail.example.com` |
+| `CERTS` | Shell glob for cert files | `'/path/cert/example.com*' '/path/cert/www*'` |
+| `KEYS` | Shell glob for key files | `'/path/key/example.com*' '/path/key/www*'` |
+| `DOMAINS_CN` | Space-separated primary domains | `example.com other.com` |
+| `DOMAINS_ALL` | All domains including SANs | `example.com www.example.com mail.example.com` |
+
+### Execution Order
+
+1. **prepare** actions start (async processes kept alive during challenge)
+2. Certificate request to Let's Encrypt
+3. **prepare** processes killed (graceful termination)
+4. If successful:
+   - **upload_certs** commands run
+   - **upload_keys** commands run
+   - **update** commands run
+
+### Action Groups
+
+| Section | Behavior |
+|---------|----------|
+| `[default]` | Applied to domains without specific override |
+| `[every]` | Applied to ALL renewed certificates (in addition) |
+| `[custom-name]` | Applied only to domains listed in `domains` key |
+
+---
+
+## OCSP Must-Staple
+
+OCSP Must-Staple is a certificate extension that tells browsers to require OCSP stapling. This improves security but requires server configuration.
+
+### Per-Domain Configuration
+
+**domains file (INI):**
+```
+example.com www +ocsp           # Enable OCSP
+legacy.example.com -ocsp        # Explicitly disable (default)
+```
+
+**TOML:**
+```toml
+[[domains]]
+primary = "example.com"
+sans = ["www"]
+ocsp_staple_required = true
+```
+
+### Server Configuration Required
+
+When using OCSP Must-Staple, configure your web server:
+
+**nginx:**
+```nginx
+ssl_stapling on;
+ssl_stapling_verify on;
+resolver 8.8.8.8 8.8.4.4 valid=300s;
+resolver_timeout 5s;
+```
+
+**Apache:**
+```apache
+SSLUseStapling On
+SSLStaplingCache shmcb:${APACHE_RUN_DIR}/ssl_stapling(32768)
+```
+
+---
+
+## Performance
+
+### Native Cryptography
+
+Install the optional `cryptography` package for ~5x faster certificate parsing:
+
+```bash
+uv sync --extra crypto
+# or: pip install cryptography
+```
+
+Check if native crypto is active:
+```bash
+lematt --test --status  # Shows "(Using native cryptography library)"
+```
+
+### Parallel Processing
+
+Process multiple certificates concurrently:
+
+```bash
+# Process 5 certificates in parallel
+lematt --prod --parallel 5
+```
+
+| Workers | 50 Certs Time | Speedup |
+|---------|---------------|---------|
+| 1 | ~120 seconds | 1x |
+| 5 | ~25 seconds | 5x |
+| 10 | ~15 seconds | 8x |
+
+**Rate Limiting**: Built-in token bucket limits to 10 requests/second to respect Let's Encrypt API limits.
+
+---
+
+## Testing
+
+### Always Test First
+
+```bash
+# 1. Validate configuration
+lematt --test --validate-config
+
+# 2. Check domain list
+lematt --test --list-domains
+
+# 3. Dry run
+lematt --test --dry-run
+
+# 4. Full test run (uses staging endpoint)
+lematt --test
+
+# 5. Check results
+lematt --test --status
+```
+
+### Test vs Production
+
+| Aspect | `--test` | `--prod` |
+|--------|----------|----------|
+| Endpoint | staging-v02.api.letsencrypt.org | acme-v02.api.letsencrypt.org |
+| Rate limits | High (for testing) | Low (production limits) |
+| Certificates | Not trusted by browsers | Trusted |
+| File suffix | `.test.pem` | `.pem` |
+| Directory | `test/` | `prod/` |
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**"Config file not found"**
+```bash
+# Ensure config exists
+ls conf/lematt.conf conf/lematt.toml
+
+# Or specify path
+lematt --test --config /path/to/lematt.conf
+```
+
+**"Account key doesn't exist"**
+```bash
+# Generate account key
+openssl genrsa 4096 > /etc/lematt/account.key
+chmod 600 /etc/lematt/account.key
+```
+
+**"Challenge directory does not exist"**
+```bash
+mkdir -p /var/www/html/.well-known/acme-challenge
+# Ensure web server serves this path
+```
+
+**"Rate limit exceeded"**
+- Use `--test` mode for development
+- Wait for rate limit window to reset (usually 1 week)
+- Consider using `--dry-run` to verify configuration
+
+### Logging
+
+Enable verbose output:
+```bash
+lematt --test -v
+```
+
+All logging uses loguru with structured output including timestamps and log levels.
+
+---
+
+## Programmatic Usage
+
+### Python API
+
+```python
+from lematt import (
+    LemattConfig,
+    DomainConfig,
+    CertificateManager,
+    CertificateExecutor,
+    ActionRunner,
+    DomainActions,
+)
+
+# Create configuration
+config = LemattConfig(
+    config_base="/etc/lematt",
+    challenge_dir="/var/www/challenges",
+    account_key="/etc/lematt/account.key",
+    is_test=True,
+)
+
+# Define domains
+domains = [
+    DomainConfig(
+        primary_domain="example.com",
+        san_domains=["www.example.com"],
+        ocsp_staple_required=False,
+    ),
+]
+
+# Load actions
+actions = ActionRunner(config)
+actions.load_actions()
+
+# Process certificates
+executor = CertificateExecutor(
+    config=config,
+    max_workers=5,
+    rate_limit=10.0,
+)
+
+summary = executor.process_batch(
+    domains=domains,
+    domain_actions=actions.domain_actions,
+)
+
+print(f"Renewed: {summary.renewed_count}, Failed: {summary.failed_count}")
+```
+
+### Using ConfigLoader
+
+```python
+from pathlib import Path
+from lematt import ConfigLoader
+
+# Load configuration (auto-detects TOML or INI)
+loader = ConfigLoader(config_base=Path("/etc/lematt"))
+loader.load()
+
+# Get typed configuration
+config = loader.get_lematt_config(
+    is_test=True,
+    concurrency=5,
+)
+
+# Get domains and actions
+domains = loader.get_domains()
+actions = loader.get_actions()
+```
+
+---
+
+## Security Considerations
+
+1. **File Permissions**: Private keys are created with 0600 permissions
+2. **Account Key**: Store securely, never commit to version control
+3. **Action Commands**: Review carefully - they run with lematt's privileges
+4. **Rate Limits**: Don't burn through production limits during testing
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Run tests: `uv run pytest`
+4. Run linter: `uv run ruff check src/`
+5. Submit a pull request
+
+### Development Setup
+
+```bash
+git clone https://github.com/mattsta/lematt
+cd lematt
+uv sync --dev
+uv run ruff check src/
+uv run pytest
+```
+
+---
+
+## License
+
+Apache 2.0
+
+---
+
+## Acknowledgments
+
+- [acme-tiny](https://github.com/diafygi/acme-tiny) - ACME client library
+- [Let's Encrypt](https://letsencrypt.org/) - Free, automated certificates
+- [loguru](https://github.com/Delgan/loguru) - Beautiful Python logging
