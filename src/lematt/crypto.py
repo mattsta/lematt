@@ -7,10 +7,11 @@ cryptography library is not available.
 
 import contextlib
 import datetime
-import logging
 import os
 import re
 import subprocess
+
+from loguru import logger
 
 from lematt.config import CertificateInfo, KeyType
 
@@ -26,8 +27,6 @@ try:
     HAS_CRYPTOGRAPHY = True
 except ImportError:
     HAS_CRYPTOGRAPHY = False
-
-logger = logging.getLogger("lematt")
 
 
 # ============================================================================

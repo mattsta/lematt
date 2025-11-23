@@ -9,17 +9,16 @@ import configparser
 import contextlib
 import itertools
 import json
-import logging
 import shlex
 import subprocess
 from typing import TYPE_CHECKING
+
+from loguru import logger
 
 from lematt.config import ActionConfig, CertificateResult, LemattConfig
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-logger = logging.getLogger("lematt")
 
 
 class ActionRunner:

@@ -22,8 +22,10 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 
-# No required dependencies - stdlib only by default
-dependencies = []
+# Required dependencies
+dependencies = [
+    "loguru>=0.7",  # Modern structured logging
+]
 
 [project.optional-dependencies]
 # Optional: native crypto for ~5x performance improvement

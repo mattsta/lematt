@@ -6,45 +6,16 @@ for the lematt certificate management tool.
 
 import argparse
 import configparser
-import logging
-import multiprocessing
 import os
 import sys
 
+from loguru import logger
+
 from lematt.actions import ActionRunner
-from lematt.config import DomainConfig, KeyType, LemattConfig
+from lematt.config import DomainConfig, LemattConfig
+from lematt.executor import CertificateExecutor, create_progress_printer
+from lematt.log import setup_logging
 from lematt.manager import CertificateManager
-
-logger = logging.getLogger("lematt")
-
-
-def setup_logging(is_cron: bool = False, verbose: bool = False) -> None:
-    """Configure logging handlers based on runtime mode.
-
-    Args:
-        is_cron: Whether running in cron mode (minimal output).
-        verbose: Whether to show debug messages.
-    """
-    logger.handlers.clear()
-    logger.setLevel(logging.DEBUG)
-
-    if is_cron:
-        formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    else:
-        formatter = logging.Formatter("%(message)s")
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    if is_cron:
-        console_handler.setLevel(logging.WARNING)
-    elif verbose:
-        console_handler.setLevel(logging.DEBUG)
-    else:
-        console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
 
 
 def load_domains(config_base: str) -> list[DomainConfig]:
@@ -169,40 +140,6 @@ def validate_config(
     return True
 
 
-def process_domain_worker(
-    domain_config: DomainConfig,
-    key_type_str: str,
-    lematt_config: LemattConfig,
-    domain_actions: dict,
-) -> dict:
-    """Worker function for parallel domain processing.
-
-    Args:
-        domain_config: The domain configuration.
-        key_type_str: Key type as string ('rsa' or 'ec').
-        lematt_config: The lematt configuration.
-        domain_actions: Domain action mappings.
-
-    Returns:
-        Dictionary with domain and result information.
-    """
-    key_type = KeyType.from_string(key_type_str)
-    manager = CertificateManager(lematt_config)
-    result = manager.process_domain(domain_config, key_type, domain_actions)
-
-    # Return serializable result
-    return {
-        "domain": result.domain,
-        "key_type": str(result.key_type),
-        "success": result.success,
-        "renewed": result.renewed,
-        "cert_path": result.cert_path,
-        "key_path": result.key_path,
-        "error_message": result.error_message,
-        "all_domains": domain_config.all_domains,
-    }
-
-
 def main() -> int:
     """Main entry point for lematt CLI.
 
@@ -284,7 +221,7 @@ def main() -> int:
     args = parser.parse_args()
 
     # Set up logging
-    setup_logging(is_cron=args.is_cron, verbose=args.verbose)
+    setup_logging(verbose=args.verbose, cron=args.is_cron, test_mode=args.is_test)
 
     # Load configuration
     config_base = os.path.dirname(os.path.realpath(args.config))
@@ -375,52 +312,30 @@ def main() -> int:
     action_runner = ActionRunner(lematt_config)
     action_runner.load_actions()
 
-    # Process certificates
-    if lematt_config.concurrency > 1:
-        # Parallel processing
-        with multiprocessing.Pool(processes=lematt_config.concurrency) as pool:
-            # Create work items
-            work_items = [
-                (domain, key_type, lematt_config, action_runner.domain_actions)
-                for domain in configured_domains
-                for key_type in ["rsa", "ec"]
-            ]
+    # Process certificates using the robust executor
+    progress_callback = create_progress_printer(verbose=args.verbose) if not args.is_cron else None
 
-            results = pool.starmap(
-                lambda d, k, c, a: process_domain_worker(d, k, c, a),
-                work_items,
-            )
-    else:
-        # Sequential processing
-        summary = manager.process_all_domains(configured_domains, action_runner.domain_actions)
-        results = summary.results
+    executor = CertificateExecutor(
+        config=lematt_config,
+        max_workers=lematt_config.concurrency,
+        rate_limit=10.0,  # Conservative: 10 requests/second
+        progress_callback=progress_callback,
+    )
+
+    summary = executor.process_batch(
+        domains=configured_domains,
+        domain_actions=action_runner.domain_actions,
+    )
+
+    # Log final summary
+    logger.info(
+        f"Completed: {summary.total_domains} certificates - "
+        f"Renewed: {summary.renewed_count}, Failed: {summary.failed_count}, "
+        f"Skipped: {summary.skipped_count}"
+    )
 
     # Process updated certificates (run actions)
-    if lematt_config.concurrency > 1:
-        # Convert worker results back to CertificateResult objects
-        from lematt.config import CertificateResult
-
-        cert_results = []
-        for r in results:
-            if r["renewed"] and r["success"]:
-                # Find the matching domain config
-                for dc in configured_domains:
-                    if dc.primary_domain == r["domain"]:
-                        cert_results.append(
-                            CertificateResult(
-                                domain_config=dc,
-                                key_type=KeyType.from_string(r["key_type"]),
-                                success=r["success"],
-                                renewed=r["renewed"],
-                                cert_path=r["cert_path"],
-                                key_path=r["key_path"],
-                                error_message=r["error_message"],
-                            )
-                        )
-                        break
-        action_runner.process_updated_certs(cert_results)
-    else:
-        action_runner.process_updated_certs(summary.results)
+    action_runner.process_updated_certs(summary.results)
 
     return 0
 

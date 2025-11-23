@@ -6,7 +6,6 @@ all certificate generation, renewal, and management operations.
 
 import contextlib
 import datetime
-import logging
 import os
 import pathlib
 import subprocess
@@ -14,6 +13,8 @@ import tempfile
 import time
 from datetime import timedelta
 from typing import TYPE_CHECKING
+
+from loguru import logger
 
 from lematt.config import (
     CertificateResult,
@@ -26,8 +27,6 @@ from lematt.crypto import HAS_CRYPTOGRAPHY, get_certificate_info
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-logger = logging.getLogger("lematt")
 
 
 class CertificateRequestError(Exception):
