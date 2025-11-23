@@ -43,12 +43,553 @@ import json
 import time
 import ssl
 import sys
+import re
 import os
 
 import acme_tiny  # distributed with lematt
 from datetime import timedelta  # make some lines shorter
-from typing import Dict, List, Tuple, Optional, Union, Any
+from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 from configparser import SectionProxy
+from dataclasses import dataclass, field
+from enum import Enum, auto
+
+# Try to import cryptography for native crypto operations
+# Falls back to openssl subprocess if not available
+try:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa, ec
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.x509.oid import NameOID, ExtensionOID
+    HAS_CRYPTOGRAPHY = True
+except ImportError:
+    HAS_CRYPTOGRAPHY = False
+
+
+# ============================================================================
+# Data Classes for Type-Safe Configuration and Results
+# ============================================================================
+
+class KeyType(Enum):
+    """Enumeration of supported key types."""
+    RSA = auto()
+    EC = auto()
+
+    @classmethod
+    def from_string(cls, s: str) -> "KeyType":
+        """Convert string to KeyType enum."""
+        mapping = {"rsa": cls.RSA, "ec": cls.EC}
+        if s.lower() not in mapping:
+            raise ValueError(f"Invalid key type: '{s}' - must be 'rsa' or 'ec'")
+        return mapping[s.lower()]
+
+    def __str__(self) -> str:
+        return self.name.lower()
+
+
+@dataclass
+class CertificateInfo:
+    """Information about a certificate's status and expiration."""
+    exists: bool
+    path: str
+    not_after: Optional[datetime.datetime] = None
+    not_before: Optional[datetime.datetime] = None
+    subject_cn: Optional[str] = None
+    san_domains: List[str] = field(default_factory=list)
+    issuer: Optional[str] = None
+    serial_number: Optional[str] = None
+    parse_error: Optional[str] = None
+
+    @property
+    def days_until_expiry(self) -> Optional[int]:
+        """Calculate days until certificate expires."""
+        if not self.not_after:
+            return None
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        return (self.not_after - now).days
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if certificate is expired."""
+        days = self.days_until_expiry
+        return days is not None and days < 0
+
+    @property
+    def needs_renewal(self) -> bool:
+        """Check if certificate needs renewal (within 30 days of expiry)."""
+        days = self.days_until_expiry
+        return days is None or days < 30
+
+
+@dataclass
+class DomainConfig:
+    """Configuration for a domain or set of SAN domains."""
+    primary_domain: str
+    san_domains: List[str] = field(default_factory=list)
+    ocsp_staple_required: bool = False
+
+    @property
+    def all_domains(self) -> List[str]:
+        """Get all domains including primary and SANs."""
+        return [self.primary_domain] + self.san_domains
+
+    @property
+    def is_san_cert(self) -> bool:
+        """Check if this is a SAN certificate."""
+        return len(self.san_domains) > 0
+
+    @property
+    def filename_base(self) -> str:
+        """Generate the base filename for this domain config."""
+        if self.is_san_cert:
+            return "_".join(self.all_domains)
+        return self.primary_domain
+
+    def __str__(self) -> str:
+        if self.is_san_cert:
+            return f"{self.primary_domain} (+{len(self.san_domains)} SANs)"
+        return self.primary_domain
+
+
+@dataclass
+class ActionConfig:
+    """Configuration for pre/post certificate actions."""
+    name: str
+    prepare_commands: List[str] = field(default_factory=list)
+    upload_certs_commands: List[str] = field(default_factory=list)
+    upload_keys_commands: List[str] = field(default_factory=list)
+    update_commands: List[str] = field(default_factory=list)
+    ocsp_staple_required: bool = False
+    domains: List[str] = field(default_factory=list)
+
+    def has_actions(self) -> bool:
+        """Check if any actions are configured."""
+        return bool(
+            self.prepare_commands or
+            self.upload_certs_commands or
+            self.upload_keys_commands or
+            self.update_commands
+        )
+
+
+@dataclass
+class LemattConfig:
+    """Global configuration for lematt."""
+    # Paths
+    config_base: str
+    challenge_dir: str
+    account_key: str
+
+    # Certificate settings
+    reauthorize_days: float = 15.0
+    generate_new_certs_after_days: float = 0.0
+    always_generate_new_keys: bool = False
+
+    # Key settings
+    rsa_key_bits: int = 2048
+    ec_curve: str = "prime256v1"
+    rsa_tag: str = ""
+    curve_tag: str = ""
+
+    # Runtime settings
+    is_test: bool = False
+    is_cron: bool = False
+    is_dry_run: bool = False
+    force_renew: bool = False
+    concurrency: int = 1
+    verbose: bool = False
+
+    # ACME endpoints
+    staging_url: str = "https://acme-staging-v02.api.letsencrypt.org/directory"
+    production_url: str = "https://acme-v02.api.letsencrypt.org/directory"
+
+    def __post_init__(self):
+        """Set default tags if not provided."""
+        if not self.rsa_tag:
+            self.rsa_tag = f"rsa{self.rsa_key_bits}"
+        if not self.curve_tag:
+            self.curve_tag = self.ec_curve
+
+    @property
+    def acme_directory_url(self) -> str:
+        """Get the appropriate ACME directory URL."""
+        return self.staging_url if self.is_test else self.production_url
+
+    @property
+    def reauthorize_timedelta(self) -> timedelta:
+        """Get the reauthorization window as a timedelta."""
+        if self.generate_new_certs_after_days > 0:
+            return timedelta(days=90) - timedelta(days=self.generate_new_certs_after_days)
+        return timedelta(days=self.reauthorize_days)
+
+    def get_subdir(self, subdir: str) -> str:
+        """Get the appropriate subdirectory based on test/prod mode."""
+        base = "test/" if self.is_test else "prod/"
+        return base + subdir
+
+    def get_cert_path(self, domain_config: DomainConfig, key_type: KeyType) -> str:
+        """Generate the certificate file path."""
+        tag = self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
+        test_suffix = ".test" if self.is_test else ""
+        return f"{self.config_base}/{self.get_subdir('cert')}/{domain_config.filename_base}-cert-combined.{tag}{test_suffix}.pem"
+
+    def get_key_path(self, domain_config: DomainConfig, key_type: KeyType) -> str:
+        """Generate the private key file path."""
+        tag = self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
+        test_suffix = ".test" if self.is_test else ""
+        return f"{self.config_base}/{self.get_subdir('key')}/{domain_config.filename_base}-key.{tag}{test_suffix}.pem"
+
+    def get_csr_path(self, domain_config: DomainConfig, key_type: KeyType) -> str:
+        """Generate the CSR file path."""
+        tag = self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
+        test_suffix = ".test" if self.is_test else ""
+        return f"{self.config_base}/{self.get_subdir('csr')}/{domain_config.filename_base}-csr.{tag}{test_suffix}.csr"
+
+
+@dataclass
+class CertificateResult:
+    """Result of a certificate generation/renewal operation."""
+    domain_config: DomainConfig
+    key_type: KeyType
+    success: bool
+    renewed: bool = False
+    cert_path: Optional[str] = None
+    key_path: Optional[str] = None
+    error_message: Optional[str] = None
+
+    @property
+    def domain(self) -> str:
+        return self.domain_config.primary_domain
+
+
+@dataclass
+class RenewalSummary:
+    """Summary of all certificate renewal operations."""
+    total_domains: int = 0
+    renewed_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
+    results: List[CertificateResult] = field(default_factory=list)
+
+    def add_result(self, result: CertificateResult) -> None:
+        """Add a result to the summary."""
+        self.results.append(result)
+        self.total_domains += 1
+        if result.renewed:
+            if result.success:
+                self.renewed_count += 1
+            else:
+                self.failed_count += 1
+        else:
+            self.skipped_count += 1
+
+    @property
+    def all_successful(self) -> bool:
+        return self.failed_count == 0
+
+
+# ============================================================================
+# Cryptography Library Functions (optional, falls back to openssl)
+# ============================================================================
+
+def generate_rsa_key_native(bits: int = 2048) -> bytes:
+    """Generate RSA private key using cryptography library."""
+    if not HAS_CRYPTOGRAPHY:
+        raise ImportError("cryptography library not available")
+
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=bits,
+        backend=default_backend()
+    )
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+
+
+def generate_ec_key_native(curve_name: str = "prime256v1") -> bytes:
+    """Generate EC private key using cryptography library."""
+    if not HAS_CRYPTOGRAPHY:
+        raise ImportError("cryptography library not available")
+
+    # Map curve names to cryptography curve objects
+    curve_map = {
+        "prime256v1": ec.SECP256R1(),
+        "secp256r1": ec.SECP256R1(),
+        "secp384r1": ec.SECP384R1(),
+        "secp521r1": ec.SECP521R1(),
+    }
+
+    if curve_name not in curve_map:
+        raise ValueError(f"Unsupported curve: {curve_name}")
+
+    private_key = ec.generate_private_key(
+        curve_map[curve_name],
+        backend=default_backend()
+    )
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+
+
+def parse_certificate_native(cert_path: str) -> CertificateInfo:
+    """Parse certificate using cryptography library."""
+    if not HAS_CRYPTOGRAPHY:
+        raise ImportError("cryptography library not available")
+
+    if not os.path.isfile(cert_path):
+        return CertificateInfo(exists=False, path=cert_path)
+
+    try:
+        with open(cert_path, "rb") as f:
+            cert_data = f.read()
+
+        cert = x509.load_pem_x509_certificate(cert_data, default_backend())
+
+        # Extract subject CN
+        try:
+            cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        except (IndexError, AttributeError):
+            cn = None
+
+        # Extract SAN domains
+        san_domains = []
+        try:
+            san_ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+            san_domains = [name.value for name in san_ext.value if isinstance(name, x509.DNSName)]
+        except x509.ExtensionNotFound:
+            pass
+
+        # Extract issuer
+        try:
+            issuer = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        except (IndexError, AttributeError):
+            issuer = None
+
+        return CertificateInfo(
+            exists=True,
+            path=cert_path,
+            not_after=cert.not_valid_after_utc.replace(tzinfo=None) if hasattr(cert, 'not_valid_after_utc') else cert.not_valid_after.replace(tzinfo=None),
+            not_before=cert.not_valid_before_utc.replace(tzinfo=None) if hasattr(cert, 'not_valid_before_utc') else cert.not_valid_before.replace(tzinfo=None),
+            subject_cn=cn,
+            san_domains=san_domains,
+            issuer=issuer,
+            serial_number=str(cert.serial_number),
+        )
+    except Exception as e:
+        return CertificateInfo(
+            exists=True,
+            path=cert_path,
+            parse_error=str(e)
+        )
+
+
+def generate_csr_native(
+    private_key_path: str,
+    domains: List[str],
+    ocsp_must_staple: bool = False
+) -> bytes:
+    """Generate CSR using cryptography library."""
+    if not HAS_CRYPTOGRAPHY:
+        raise ImportError("cryptography library not available")
+
+    # Load private key
+    with open(private_key_path, "rb") as f:
+        private_key = serialization.load_pem_private_key(
+            f.read(),
+            password=None,
+            backend=default_backend()
+        )
+
+    # Build CSR
+    primary_domain = domains[0]
+    builder = x509.CertificateSigningRequestBuilder()
+    builder = builder.subject_name(x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, primary_domain),
+    ]))
+
+    # Add SAN extension if multiple domains
+    if len(domains) > 1 or True:  # Always add SAN for consistency
+        san_names = [x509.DNSName(d) for d in domains]
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName(san_names),
+            critical=False,
+        )
+
+    # Add OCSP Must-Staple if requested
+    if ocsp_must_staple:
+        builder = builder.add_extension(
+            x509.TLSFeature([x509.TLSFeatureType.status_request]),
+            critical=False,
+        )
+
+    # Sign and return
+    csr = builder.sign(private_key, hashes.SHA256(), default_backend())
+    return csr.public_bytes(serialization.Encoding.PEM)
+
+
+# ============================================================================
+# Unified Crypto Functions (native with openssl fallback)
+# ============================================================================
+
+def generate_private_key(key_type: KeyType, config: Optional["LemattConfig"] = None,
+                         rsa_bits: int = 2048, ec_curve: str = "prime256v1") -> bytes:
+    """Generate a private key, using native crypto if available."""
+    if HAS_CRYPTOGRAPHY:
+        if key_type == KeyType.RSA:
+            return generate_rsa_key_native(rsa_bits)
+        else:
+            return generate_ec_key_native(ec_curve)
+    else:
+        # Fall back to openssl subprocess
+        if key_type == KeyType.RSA:
+            result = subprocess.run(
+                ["openssl", "genrsa", str(rsa_bits)],
+                capture_output=True,
+                check=True
+            )
+        else:
+            result = subprocess.run(
+                ["openssl", "ecparam", "-genkey", "-name", ec_curve],
+                capture_output=True,
+                check=True
+            )
+        return result.stdout
+
+
+def get_certificate_info(cert_path: str) -> CertificateInfo:
+    """Get certificate information, using native crypto if available."""
+    if HAS_CRYPTOGRAPHY:
+        return parse_certificate_native(cert_path)
+
+    # Fall back to openssl subprocess
+    if not os.path.isfile(cert_path):
+        return CertificateInfo(exists=False, path=cert_path)
+
+    try:
+        # Get expiration date
+        result = subprocess.run(
+            ["openssl", "x509", "-in", cert_path, "-noout", "-enddate", "-startdate", "-subject", "-issuer"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        info = CertificateInfo(exists=True, path=cert_path)
+        ssl_date_fmt = r"%b %d %H:%M:%S %Y %Z"
+
+        for line in result.stdout.strip().split("\n"):
+            if line.startswith("notAfter="):
+                try:
+                    info.not_after = datetime.datetime.strptime(line[9:], ssl_date_fmt)
+                except ValueError:
+                    pass
+            elif line.startswith("notBefore="):
+                try:
+                    info.not_before = datetime.datetime.strptime(line[10:], ssl_date_fmt)
+                except ValueError:
+                    pass
+            elif line.startswith("subject="):
+                # Extract CN from subject
+                import re
+                cn_match = re.search(r'CN\s*=\s*([^,/]+)', line)
+                if cn_match:
+                    info.subject_cn = cn_match.group(1).strip()
+            elif line.startswith("issuer="):
+                import re
+                cn_match = re.search(r'CN\s*=\s*([^,/]+)', line)
+                if cn_match:
+                    info.issuer = cn_match.group(1).strip()
+
+        # Get SAN domains
+        try:
+            san_result = subprocess.run(
+                ["openssl", "x509", "-in", cert_path, "-noout", "-text"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            import re
+            san_match = re.search(r'X509v3 Subject Alternative Name:\s*\n\s*([^\n]+)', san_result.stdout)
+            if san_match:
+                san_line = san_match.group(1)
+                info.san_domains = [
+                    d.replace("DNS:", "").strip()
+                    for d in san_line.split(",")
+                    if d.strip().startswith("DNS:")
+                ]
+        except subprocess.CalledProcessError:
+            pass
+
+        return info
+
+    except (subprocess.CalledProcessError, OSError) as e:
+        return CertificateInfo(
+            exists=True,
+            path=cert_path,
+            parse_error=str(e)
+        )
+
+
+def create_csr(private_key_path: str, domains: List[str], output_path: str,
+               ocsp_must_staple: bool = False) -> bool:
+    """Create a CSR, using native crypto if available."""
+    if HAS_CRYPTOGRAPHY:
+        try:
+            csr_bytes = generate_csr_native(private_key_path, domains, ocsp_must_staple)
+            with open(output_path, "wb") as f:
+                f.write(csr_bytes)
+            return True
+        except Exception as e:
+            logger.warning(f"Native CSR generation failed, falling back to openssl: {e}")
+
+    # Fall back to openssl subprocess
+    primary_domain = domains[0]
+    use_san = len(domains) > 1
+
+    san_config = ""
+    cmd_san = ""
+    if use_san:
+        alt_names = [f"DNS:{domain}" for domain in domains]
+        san_config = ",".join(alt_names)
+        cmd_san = "-reqexts SAN"
+
+    ocsp_line = ""
+    if ocsp_must_staple:
+        ocsp_line = "1.3.6.1.5.5.7.1.24 = DER:30:03:02:01:05"
+
+    stdin_config = f"""[req]
+distinguished_name=req_dn
+
+[req_dn]
+
+[v3_req]
+basicConstraints=CA:FALSE
+keyUsage=nonRepudiation,digitalSignature,keyEncipherment
+{ocsp_line}
+
+[SAN]
+subjectAltName={san_config}"""
+
+    try:
+        cmd = f"openssl req -new -sha256 -key {private_key_path} -subj /CN={primary_domain} {cmd_san} -config -"
+        result = subprocess.run(
+            cmd.split(),
+            input=stdin_config.encode(),
+            capture_output=True,
+            check=True
+        )
+        with open(output_path, "wb") as f:
+            f.write(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"CSR generation failed: {e}")
+        return False
+
 
 # Configure module-level logger
 logger = logging.getLogger("lematt")
@@ -868,12 +1409,13 @@ def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts
 
 
 def showCertificateStatus(configuredDomains, configBase):
-    """Display status of all configured certificates."""
-    utcnow = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-    ssl_date_fmt = r"%b %d %H:%M:%S %Y %Z"
-
+    """Display status of all configured certificates using CertificateInfo dataclass."""
     print("\n" + "=" * 80)
     print("CERTIFICATE STATUS REPORT")
+    if HAS_CRYPTOGRAPHY:
+        print("(Using native cryptography library)")
+    else:
+        print("(Using openssl subprocess - install 'cryptography' for better performance)")
     print("=" * 80)
     print(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
     print("-" * 80)
@@ -896,34 +1438,30 @@ def showCertificateStatus(configuredDomains, configBase):
             if IS_TEST:
                 cert_path = cert_path.replace(".pem", ".test.pem")
 
-            cert_details = certFromFile(cert_path)
+            # Use the new unified get_certificate_info function
+            cert_info = get_certificate_info(cert_path)
 
-            if cert_details is True:
-                # Cert doesn't exist
+            if not cert_info.exists:
                 status = "⚠️  MISSING"
                 expires_str = "N/A"
                 days_left = "N/A"
-            elif isinstance(cert_details, dict) and "notAfter" in cert_details:
-                try:
-                    expiration = datetime.datetime.strptime(cert_details["notAfter"], ssl_date_fmt)
-                    remaining = expiration - utcnow
-                    days = remaining.days
+            elif cert_info.parse_error:
+                status = f"⚠️  PARSE ERROR"
+                expires_str = "Unknown"
+                days_left = "?"
+            elif cert_info.not_after:
+                days = cert_info.days_until_expiry
+                expires_str = cert_info.not_after.strftime("%Y-%m-%d")
+                days_left = str(days) if days is not None else "?"
 
-                    expires_str = expiration.strftime("%Y-%m-%d")
-                    days_left = str(days)
-
-                    if days < 0:
-                        status = "❌ EXPIRED"
-                    elif days < 7:
-                        status = "🔴 CRITICAL"
-                    elif days < 30:
-                        status = "🟡 RENEW SOON"
-                    else:
-                        status = "✅ OK"
-                except (ValueError, KeyError):
-                    status = "⚠️  PARSE ERROR"
-                    expires_str = "Unknown"
-                    days_left = "?"
+                if cert_info.is_expired:
+                    status = "❌ EXPIRED"
+                elif days is not None and days < 7:
+                    status = "🔴 CRITICAL"
+                elif days is not None and days < 30:
+                    status = "🟡 RENEW SOON"
+                else:
+                    status = "✅ OK"
             else:
                 status = "⚠️  UNKNOWN"
                 expires_str = "Unknown"
