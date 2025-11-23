@@ -34,7 +34,10 @@ import subprocess
 import itertools
 import argparse
 import datetime
+import tempfile
 import pathlib
+import logging
+import shlex
 import socket
 import json
 import time
@@ -44,6 +47,12 @@ import os
 
 import acme_tiny  # distributed with lematt
 from datetime import timedelta  # make some lines shorter
+from typing import Dict, List, Tuple, Optional, Union, Any
+from configparser import SectionProxy
+
+# Configure module-level logger
+logger = logging.getLogger("lematt")
+logger.setLevel(logging.DEBUG)  # Allow all levels; handlers will filter
 
 MIN_VERSION = (3, 6)
 if sys.version_info < MIN_VERSION:
@@ -55,24 +64,72 @@ if sys.version_info < MIN_VERSION:
     sys.exit(1)
 
 
-def log(what, mode="", update=False):
-    # If requesting more than just a newline separator...
-    if what:
-        if IS_TEST:
-            prefix = "[TEST] "
-        else:
-            prefix = "> "
+def setup_logging(is_cron: bool = False, verbose: bool = False) -> None:
+    """Configure logging handlers based on runtime mode."""
+    # Clear any existing handlers
+    logger.handlers.clear()
+
+    # Create formatter
+    if is_cron:
+        # Simpler format for cron (typically captured in logs)
+        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s',
+                                       datefmt='%Y-%m-%d %H:%M:%S')
     else:
-        prefix = ""
+        # More detailed format for interactive use
+        formatter = logging.Formatter('%(message)s')
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    if is_cron:
+        console_handler.setLevel(logging.WARNING)  # Only warnings and above for cron
+    elif verbose:
+        console_handler.setLevel(logging.DEBUG)
+    else:
+        console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+
+def log(what: str, mode: str = "", update: bool = False) -> None:
+    """Log a message with optional mode prefix.
+
+    Args:
+        what: The message to log
+        mode: Optional category/mode prefix (e.g., "CMD", "RETRY", "ERROR")
+        update: If True, always log even in cron mode (treated as important)
+    """
+    # Handle empty messages (visual separators)
+    if not what:
+        if not IS_CRON:
+            print("")
+        return
+
+    # Build the message
+    if IS_TEST:
+        prefix = "[TEST] "
+    else:
+        prefix = "> "
 
     if mode:
-        mode = f"[{mode}]"
+        mode_str = f"[{mode}] "
+    else:
+        mode_str = ""
 
-    if not IS_CRON or update:
-        print(f"{prefix}{mode} {what}")
+    message = f"{prefix}{mode_str}{what}"
+
+    # Determine log level based on mode and update flag
+    if mode in ("ERROR", "FAIL"):
+        logger.error(message)
+    elif mode in ("WARN", "WARNING"):
+        logger.warning(message)
+    elif update:
+        logger.info(message)
+    else:
+        logger.debug(message)
 
 
-def getSubdir(subdir):
+def getSubdir(subdir: str) -> str:
+    """Return the appropriate subdirectory path based on test/prod mode."""
     if IS_TEST:
         base = "test/"
     else:
@@ -81,7 +138,7 @@ def getSubdir(subdir):
     return base + subdir
 
 
-def loadDomainActions():
+def loadDomainActions() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     """Read actions.conf and parse actions into usable dicts."""
     domainActions = {}
     domainActionNames = {}
@@ -148,14 +205,14 @@ def loadDomainActions():
     return domainActions, domainActionNames
 
 
-def gendir(subname):
-    """Create a directory hierarchy but don't complain if already exists"""
+def gendir(subname: str) -> None:
+    """Create a directory hierarchy but don't complain if already exists."""
     adir = pathlib.Path("{}/{}".format(configBase, subname))
     adir.mkdir(parents=True, exist_ok=True)
 
 
-def run(thing, shell=False, output=True, stdinSend=None):
-    """Run any string as a command (maybe as shell for env/expansion too)"""
+def run(thing: str, shell: bool = False, output: bool = True, stdinSend: Optional[str] = None) -> subprocess.CompletedProcess:
+    """Run any string as a command (maybe as shell for env/expansion too)."""
     log(f"Running: {thing}", "CMD", update=True)
     if stdinSend:
         # use 'repr' because we want to print the string with visible \n
@@ -204,8 +261,10 @@ def runAndWrite(thing, writeTo, perm=0o644, shell=False, stdinSend=None):
         w.write(ran.stdout.decode("utf-8"))
 
 
-def customizeName(subdir, name, subtype, enctype, ext="pem"):
-    assert enctype == "rsa" or enctype == "ec"
+def customizeName(subdir: str, name: str, subtype: str, enctype: str, ext: str = "pem") -> str:
+    """Generate a customized filename for keys, certs, or CSRs."""
+    if enctype not in ("rsa", "ec"):
+        raise ValueError(f"Invalid enctype: '{enctype}' - must be 'rsa' or 'ec'")
 
     return "{}/{}/{}-{}.{}{}.{}".format(
         configBase,
@@ -319,21 +378,37 @@ def certFromNetwork(hostname):
     return ssl_info
 
 
-def certFromFile(certPath):
-    """Get cert expiration from local file"""
+def certFromFile(certPath: str) -> Union[bool, Dict[str, str]]:
+    """Get cert expiration from local file."""
     # If cert doesn't exist, it must be requested...
     certExists = os.path.isfile(certPath)
     if not certExists:
         return True
 
-    # This is an internal Python API. Not guaranteed to exist across releases.
-    certDetails = ssl._ssl._test_decode_cert(certPath)
+    # Parse certificate to extract expiration date
+    # We use openssl to avoid relying on private Python APIs
+    try:
+        result = subprocess.run(
+            ["openssl", "x509", "-in", certPath, "-noout", "-enddate"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        # Output format: "notAfter=Mar 15 12:00:00 2024 GMT"
+        enddate_line = result.stdout.strip()
+        if enddate_line.startswith("notAfter="):
+            date_str = enddate_line[9:]  # Remove "notAfter=" prefix
+            return {"notAfter": date_str}
+    except (subprocess.CalledProcessError, OSError) as e:
+        log(f"Warning: Could not parse certificate {certPath}: {e}", "WARN")
+        # If we can't parse, assume renewal is needed
+        return True
 
-    assert isinstance(certDetails, dict)
-    return certDetails
+    return True
 
 
-def certNeedsRenewal(certDetails, utcnow):
+def certNeedsRenewal(certDetails: Union[bool, Dict[str, str]], utcnow: datetime.datetime) -> bool:
+    """Check if a certificate needs renewal based on expiration date."""
     # The first check guards against True from 'certFromFile()'.
     # (if cert doesn't exist, we obviously need to request one)
     if not isinstance(certDetails, dict):
@@ -362,7 +437,12 @@ def certNeedsRenewal(certDetails, utcnow):
     return needsRenewNow(expirationAsDate)
 
 
-def requestCert(csr, outCert, isTest=False):
+class CertificateRequestError(Exception):
+    """Raised when certificate request fails after all retries."""
+    pass
+
+
+def requestCert(csr: str, outCert: str, isTest: bool = False, max_retries: int = 3) -> bool:
     if isTest:
         directory = STAGING
     else:
@@ -371,24 +451,34 @@ def requestCert(csr, outCert, isTest=False):
     # This is where we can plug in different cert request methods.
     # Right now we just pulled in acme_tiny which is a simple
     # http-01 wrapper around openssl subprocesses.
-    # We can add dns-01 fairly easily if we add a way to injest
+    # We can add dns-01 fairly easily if we add a way to ingest
     # DNS API credentials then integrate with both DNS APIs themselves
     # (can easily adapt from other LE requesting systems) then
     # send acme dns-01 requests to LE too.
-    try:
-        signedCert = acme_tiny.get_crt(
-            ACCOUNT_KEY, csr, CHALLENGE_DIR, directory_url=directory
-        )
-    except Exception as e:
-        print("FAILED FOR DOMAIN:", csr, "BECAUSE", e)
-        return
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            signedCert = acme_tiny.get_crt(
+                ACCOUNT_KEY, csr, CHALLENGE_DIR, directory_url=directory
+            )
+            # Success - write the certificate
+            with open(outCert, "w") as writeMe:
+                writeMe.write(signedCert)
+            return True
+        except Exception as e:
+            last_error = e
+            wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
+            if attempt < max_retries - 1:
+                log(f"Certificate request failed (attempt {attempt + 1}/{max_retries}): {e}", "RETRY")
+                log(f"Retrying in {wait_time} seconds...", "RETRY")
+                time.sleep(wait_time)
+            else:
+                log(f"Certificate request failed after {max_retries} attempts: {e}", "ERROR", update=True)
 
-    if False and concurrency > 2:
-        # Acme doesn't like too-aggressive attempts
-        time.sleep(0.5)
-
-    with open(outCert, "w") as writeMe:
-        writeMe.write(signedCert)
+    # All retries exhausted
+    log(f"FAILED FOR CSR: {csr}", "ERROR", update=True)
+    log(f"Last error: {last_error}", "ERROR", update=True)
+    return False
 
 
 def prepareDomainForUpdate(domain):
@@ -435,10 +525,9 @@ def unprepareDomainForUpdate(prepared):
         # Reset terminal semantics...
         try:
             run("stty sane")
-        except BaseException:
-            # This may not work if run detatched
-            # from a shell (like via cron)? Just ignore any
-            # stty failures.
+        except (subprocess.CalledProcessError, OSError):
+            # This may not work if run detached from a shell
+            # (like via cron). Ignore stty failures.
             pass
 
 
@@ -448,7 +537,8 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
     updatedCerts = {}
 
     # Use timestamp for detecting expired certs or certs needing renewal soon
-    utcnow = datetime.datetime.utcnow()
+    # Note: Using timezone-aware UTC time (datetime.utcnow() is deprecated in Python 3.12+)
+    utcnow = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
     def updateDomainForKeyType(domain, keyType):
         # If this is a SAN request, combine all domains for filenames
@@ -468,7 +558,8 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
         else:
             domains = []
 
-        assert "." in domain, f"Domain ({domain}) isn't a domain name?"
+        if "." not in domain:
+            raise ValueError(f"Invalid domain name: '{domain}' - must contain at least one period")
         privateKey = customizeName("key", domain, "key", keyType)
         cert = customizeName("cert", domain, "cert-combined", keyType)
         csr = customizeName("csr", domain, "csr", keyType, "csr")
@@ -495,19 +586,24 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
             for d in domains:
                 singleDomainKey = customizeName("key", d, "key", keyType)
 
-                # remove if exists, then we re-create immediately after
-                try:
-                    os.unlink(singleDomainKey)
-                except:
-                    pass
-
+                # Atomically replace symlink to avoid race conditions
                 keyNameOnly = os.path.basename(privateKey)
                 log(
                     f"Linking {keyNameOnly} to {singleDomainKey}",
                     keyType,
                     update=True,
                 )
-                os.symlink(keyNameOnly, singleDomainKey)
+                # Create symlink atomically using a temp file
+                temp_link = tempfile.mktemp(dir=os.path.dirname(singleDomainKey))
+                try:
+                    os.symlink(keyNameOnly, temp_link)
+                    os.replace(temp_link, singleDomainKey)  # Atomic replacement
+                except OSError as e:
+                    log(f"Warning: Could not create symlink {singleDomainKey}: {e}", "WARN")
+                    try:
+                        os.unlink(temp_link)
+                    except OSError:
+                        pass
 
         def generateCSR_():
             """Either: use CSR if exists or create new if requested"""
@@ -520,11 +616,26 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
 
         log(f"Checking certificate for {domain}...", keyType)
 
-        if not certNeedsRenewal(certFromFile(cert), utcnow):
+        needs_renewal = certNeedsRenewal(certFromFile(cert), utcnow)
+        if FORCE_RENEW:
+            log("Force renewal requested", keyType, update=True)
+            needs_renewal = True
+
+        if not needs_renewal:
             log("Not renewing!", keyType)
-            return
+            return updatedCerts
 
         log(f"Renewing {domain}!", keyType, update=True)
+
+        # In dry-run mode, just report what would happen
+        if IS_DRY_RUN:
+            log(f"[DRY-RUN] Would generate key: {privateKey}", keyType, update=True)
+            log(f"[DRY-RUN] Would generate CSR: {csr}", keyType, update=True)
+            log(f"[DRY-RUN] Would request certificate: {cert}", keyType, update=True)
+            if domains:
+                for d in domains:
+                    log(f"[DRY-RUN] Would create symlink for: {d}", keyType, update=True)
+            return updatedCerts
 
         generateKey()
         generateCSR_()
@@ -534,7 +645,14 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
         else:
             prepared = prepareDomainForUpdate(domain)
 
-        requestCert(csr, cert, IS_TEST)
+        cert_success = requestCert(csr, cert, IS_TEST)
+
+        # Clean up prepare processes regardless of cert success
+        unprepareDomainForUpdate(prepared)
+
+        if not cert_success:
+            log(f"Skipping symlinks and updates for {domain} due to cert failure", keyType, update=True)
+            return updatedCerts
 
         # Also create individually named symlinks for each domain pointing
         # back to the primary bundle where it originates.
@@ -545,19 +663,20 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
         for d in domains:
             singleDomainCert = customizeName("cert", d, "cert-combined", keyType)
 
-            # remove if exists, then we re-create immediately after
-            try:
-                os.unlink(singleDomainCert)
-            except:
-                pass
-
+            # Atomically replace symlink to avoid race conditions
             certNameOnly = os.path.basename(cert)
             log(f"Linking {certNameOnly} to {singleDomainCert}", keyType, update=True)
-            # symlink from single FILE IN DIR to SINGLE FILE IN DIR
-            # (i.e. don't smlink the full absolute path in lematt/conf/prod/cert/...)
-            os.symlink(certNameOnly, singleDomainCert)
-
-        unprepareDomainForUpdate(prepared)
+            # Create symlink atomically using a temp file
+            temp_link = tempfile.mktemp(dir=os.path.dirname(singleDomainCert))
+            try:
+                os.symlink(certNameOnly, temp_link)
+                os.replace(temp_link, singleDomainCert)  # Atomic replacement
+            except OSError as e:
+                log(f"Warning: Could not create symlink {singleDomainCert}: {e}", "WARN")
+                try:
+                    os.unlink(temp_link)
+                except OSError:
+                    pass
 
         # NOTE: if you have DUPLICATE certificates like a single
         #       domain certificate with the same in another cert's SANs,
@@ -581,7 +700,8 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
         else:
             updatedCerts[domain] = tuple([domain])
 
-    assert keyType == "rsa" or keyType == "ec", f"Invalid keyType {keyType}!"
+    if keyType not in ("rsa", "ec"):
+        raise ValueError(f"Invalid keyType: '{keyType}' - must be 'rsa' or 'ec'")
 
     updateDomainForKeyType(configuredDomain, keyType)
     log("")  # visually break with a newline between processed domains
@@ -622,25 +742,28 @@ def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts
         # in aggregated/combined/unified commands instead of running
         # N copies and N updates if we were processing all cert updates
         # individually.
+        # Note: We use shlex.quote() for domain names to prevent shell injection,
+        # but preserve the glob pattern (*) which needs to be expanded by the shell.
         replaceCert = " ".join(
             [
-                f"{configBase}/{getSubdir('cert')}/{ud}*"
+                shlex.quote(f"{configBase}/{getSubdir('cert')}/{ud}") + "*"
                 for uds in updatedDomains
                 for ud in uds
             ]
         )
         replaceKey = " ".join(
             [
-                f"{configBase}/{getSubdir('key')}/{ud}*"
+                shlex.quote(f"{configBase}/{getSubdir('key')}/{ud}") + "*"
                 for uds in updatedDomains
                 for ud in uds
             ]
         )
 
-        replaceDomainsCN = " ".join(firstDomains)
+        # Quote domain names to prevent shell injection
+        replaceDomainsCN = " ".join(shlex.quote(d) for d in firstDomains)
 
         # Flatten the 'updatedDomains' list of lists so we can just join it all
-        replaceDomainsALL = " ".join(set(itertools.chain(*updatedDomains)))
+        replaceDomainsALL = " ".join(shlex.quote(d) for d in set(itertools.chain(*updatedDomains)))
 
         # This loop basically flattens nested updatedDomains and annotates
         # which ones are SAN domains versus the root CN itself
@@ -670,19 +793,30 @@ def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts
         # Do we have upload cert overrides?
         if "uploadCerts" in actions:
             for upload in actions["uploadCerts"]:
-                run(upload.replace("CERTS", replaceCert), shell=True)
+                cmd = upload.replace("CERTS", replaceCert)
+                if IS_DRY_RUN:
+                    log(f"[DRY-RUN] Would run: {cmd}", "action", update=True)
+                else:
+                    run(cmd, shell=True)
 
         # Do we have upload key overrides?
         if "uploadKeys" in actions:
             for upload in actions["uploadKeys"]:
-                run(upload.replace("KEYS", replaceKey), shell=True)
+                cmd = upload.replace("KEYS", replaceKey)
+                if IS_DRY_RUN:
+                    log(f"[DRY-RUN] Would run: {cmd}", "action", update=True)
+                else:
+                    run(cmd, shell=True)
 
         # Now with certs/keys replaced, run full service update:
         if "update" in actions:
             for action in actions["update"]:
                 action = action.replace("DOMAINS_CN", replaceDomainsCN)
                 action = action.replace("DOMAINS_ALL", replaceDomainsALL)
-                run(action, shell=True)
+                if IS_DRY_RUN:
+                    log(f"[DRY-RUN] Would run: {action}", "action", update=True)
+                else:
+                    run(action, shell=True)
 
     # 'combinedProcessingResult' is a map of:
     # actionNames -> set of domains for action
@@ -733,7 +867,156 @@ def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts
         log("", update=True)  # line break
 
 
-def loadDomains():
+def showCertificateStatus(configuredDomains, configBase):
+    """Display status of all configured certificates."""
+    utcnow = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    ssl_date_fmt = r"%b %d %H:%M:%S %Y %Z"
+
+    print("\n" + "=" * 80)
+    print("CERTIFICATE STATUS REPORT")
+    print("=" * 80)
+    print(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
+    print("-" * 80)
+
+    for configuredDomain in configuredDomains:
+        # Handle SAN domains
+        if isinstance(configuredDomain, list):
+            domain_display = configuredDomain[0]
+            if len(configuredDomain) > 1:
+                domain_display += f" (+{len(configuredDomain)-1} SANs)"
+            domain_for_file = "_".join(configuredDomain)
+        else:
+            domain_display = configuredDomain
+            domain_for_file = configuredDomain
+
+        for keyType in ["rsa", "ec"]:
+            tag = RSA_TAG if keyType == "rsa" else CURVE_TAG
+            cert_path = f"{configBase}/{getSubdir('cert')}/{domain_for_file}-cert-combined.{tag}.pem"
+
+            if IS_TEST:
+                cert_path = cert_path.replace(".pem", ".test.pem")
+
+            cert_details = certFromFile(cert_path)
+
+            if cert_details is True:
+                # Cert doesn't exist
+                status = "⚠️  MISSING"
+                expires_str = "N/A"
+                days_left = "N/A"
+            elif isinstance(cert_details, dict) and "notAfter" in cert_details:
+                try:
+                    expiration = datetime.datetime.strptime(cert_details["notAfter"], ssl_date_fmt)
+                    remaining = expiration - utcnow
+                    days = remaining.days
+
+                    expires_str = expiration.strftime("%Y-%m-%d")
+                    days_left = str(days)
+
+                    if days < 0:
+                        status = "❌ EXPIRED"
+                    elif days < 7:
+                        status = "🔴 CRITICAL"
+                    elif days < 30:
+                        status = "🟡 RENEW SOON"
+                    else:
+                        status = "✅ OK"
+                except (ValueError, KeyError):
+                    status = "⚠️  PARSE ERROR"
+                    expires_str = "Unknown"
+                    days_left = "?"
+            else:
+                status = "⚠️  UNKNOWN"
+                expires_str = "Unknown"
+                days_left = "?"
+
+            domain_with_type = f"{domain_display} ({keyType.upper()})"
+            print(f"{domain_with_type:<40} {expires_str:<20} {days_left:<12} {status}")
+
+    print("=" * 80 + "\n")
+
+
+def validateConfig(config: SectionProxy, configBase: str) -> bool:
+    """Validate configuration values and provide helpful error messages."""
+    errors = []
+    warnings = []
+
+    # Check required config values
+    required_keys = ["challengeDropDir", "accountKey"]
+    for key in required_keys:
+        if key not in config or not config[key]:
+            errors.append(f"Missing required config: '{key}'")
+
+    # Validate challengeDropDir exists
+    if "challengeDropDir" in config:
+        challenge_dir = config["challengeDropDir"]
+        if not os.path.isdir(challenge_dir):
+            errors.append(f"Challenge directory does not exist: {challenge_dir}")
+            errors.append(f"  Create it with: mkdir -p {challenge_dir}")
+
+    # Validate RSA key size
+    if "keyBitsRSA" in config:
+        try:
+            key_bits = int(config["keyBitsRSA"])
+            if key_bits < 2048:
+                warnings.append(f"RSA key size {key_bits} is insecure. Use at least 2048 bits.")
+            elif key_bits > 4096:
+                warnings.append(f"RSA key size {key_bits} may cause performance issues. 2048-4096 recommended.")
+        except ValueError:
+            errors.append(f"Invalid keyBitsRSA value: {config['keyBitsRSA']} (must be integer)")
+
+    # Validate curve
+    valid_curves = ["prime256v1", "secp256r1", "secp384r1", "secp521r1"]
+    if "curve" in config:
+        curve = config["curve"]
+        if curve not in valid_curves:
+            warnings.append(f"EC curve '{curve}' may not be widely supported. Recommended: {valid_curves}")
+
+    # Validate reauthorizeDays
+    if "reauthorizeDays" in config:
+        try:
+            days = float(config["reauthorizeDays"])
+            if days < 1:
+                warnings.append(f"reauthorizeDays={days} is very aggressive. Consider higher value.")
+            elif days > 89:
+                warnings.append(f"reauthorizeDays={days} exceeds LE cert lifetime (90 days).")
+        except ValueError:
+            errors.append(f"Invalid reauthorizeDays value: {config['reauthorizeDays']}")
+
+    # Validate generateNewCertsAfterDays
+    if "generateNewCertsAfterDays" in config:
+        try:
+            days = float(config["generateNewCertsAfterDays"])
+            if days > 0 and days < 3.5:
+                warnings.append(f"generateNewCertsAfterDays={days} may hit rate limits. Minimum 3.5 days recommended.")
+        except ValueError:
+            errors.append(f"Invalid generateNewCertsAfterDays value: {config['generateNewCertsAfterDays']}")
+
+    # Check domains file exists
+    domains_file = f"{configBase}/domains"
+    if not os.path.isfile(domains_file):
+        errors.append(f"Domains file not found: {domains_file}")
+
+    # Check actions.conf exists
+    actions_file = f"{configBase}/actions.conf"
+    if not os.path.isfile(actions_file):
+        errors.append(f"Actions config not found: {actions_file}")
+
+    # Report warnings
+    for warning in warnings:
+        logger.warning(f"Config warning: {warning}")
+
+    # Report errors and exit if any
+    if errors:
+        for error in errors:
+            logger.error(f"Config error: {error}")
+        logger.error("Configuration validation failed. Please fix the errors above.")
+        sys.exit(1)
+
+    return True
+
+
+def loadDomains() -> List[Union[str, List[str]]]:
+    """Load domain configuration from the domains file."""
     # Format of 'domains' file is one or more domains per line.
     # Each line becomes ONE certificate. If more than one domain
     # is present, an SAN certificate will be generated.
@@ -831,10 +1114,50 @@ if __name__ == "__main__":
         "must be in the same directory as lematt.conf",
     )
 
+    parser.add_argument(
+        "-v", "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Enable verbose output (show all debug messages)",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        dest="dryRun",
+        action="store_true",
+        help="Show what would be done without making any changes",
+    )
+
+    parser.add_argument(
+        "--status",
+        dest="showStatus",
+        action="store_true",
+        help="Show certificate status and expiration dates, then exit",
+    )
+
+    parser.add_argument(
+        "--domain",
+        dest="singleDomain",
+        default=None,
+        help="Process only a specific domain (useful for testing)",
+    )
+
+    parser.add_argument(
+        "--force-renew",
+        dest="forceRenew",
+        action="store_true",
+        help="Force renewal regardless of expiration date",
+    )
+
     args = parser.parse_args()
 
     IS_CRON = args.isCron
     IS_TEST = args.isTest
+    IS_DRY_RUN = args.dryRun
+    FORCE_RENEW = args.forceRenew
+
+    # Set up logging based on arguments
+    setup_logging(is_cron=IS_CRON, verbose=args.verbose)
 
     concurrency = args.concurrency
 
@@ -850,10 +1173,13 @@ if __name__ == "__main__":
     }
 
     if not conf.read(args.config):
-        print(f"Requested config path not found: {args.config}")
+        logger.error(f"Requested config path not found: {args.config}")
         sys.exit(1)
 
     config = conf["config"]
+
+    # Validate configuration before proceeding
+    validateConfig(config, configBase)
 
     # We treat these as globals throughout the code, so they must
     # be initialized here outside of any functions:
@@ -916,15 +1242,37 @@ if __name__ == "__main__":
 
     configuredDomains = loadDomains()
 
+    # Filter to single domain if requested
+    if args.singleDomain:
+        filtered = []
+        for d in configuredDomains:
+            if isinstance(d, list):
+                if args.singleDomain in d or args.singleDomain == d[0]:
+                    filtered.append(d)
+            elif d == args.singleDomain:
+                filtered.append(d)
+        if not filtered:
+            logger.error(f"Domain '{args.singleDomain}' not found in configuration")
+            sys.exit(1)
+        configuredDomains = filtered
+        logger.info(f"Processing single domain: {args.singleDomain}")
+
+    # Handle --status command
+    if args.showStatus:
+        showCertificateStatus(configuredDomains, configBase)
+        sys.exit(0)
+
     if not IS_CRON:
         print(f"{testing}Welcome to LE Matt!")
+        if IS_DRY_RUN:
+            print("[DRY-RUN MODE - No changes will be made]")
         print("Using domain list:")
         for domain in configuredDomains:
             print(f"\t{domain}")
 
     if not os.path.isfile(ACCOUNT_KEY):
-        print(f"Account key doesn't exist: {ACCOUNT_KEY}")
-        print("Create your LE account key with: openssl genrsa 4096 > key.pem")
+        logger.error(f"Account key doesn't exist: {ACCOUNT_KEY}")
+        logger.error("Create your LE account key with: openssl genrsa 4096 > key.pem")
         sys.exit(1)
 
     # Fetch intermediate cert so user can copy it elsewhere if needed
