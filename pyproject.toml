@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 
-# Required dependencies
+# Required dependencies (tomllib is stdlib in Python 3.11+)
 dependencies = [
     "loguru>=0.7",  # Modern structured logging
 ]

@@ -15,7 +15,15 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from lematt.config import CertificateResult, DomainConfig, KeyType, LemattConfig, RenewalSummary
+from lematt.config import (
+    CertificateResult,
+    DomainActions,
+    DomainConfig,
+    KeyType,
+    LemattConfig,
+    RenewalSummary,
+    WorkerResult,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -136,7 +144,7 @@ class WorkItem:
     domain_config: DomainConfig
     key_type: KeyType
     config: LemattConfig
-    domain_actions: dict
+    domain_actions: DomainActions
 
     @property
     def task_key(self) -> str:
@@ -147,14 +155,14 @@ def _process_certificate_worker(
     domain_config: DomainConfig,
     key_type: KeyType,
     config: LemattConfig,
-    domain_actions: dict,
-) -> dict:
+    domain_actions: DomainActions,
+) -> dict[str, object]:
     """Worker function for processing a single certificate.
 
     This function runs in a separate process and must be a top-level
     function (not a method or lambda) for proper pickling.
 
-    Returns a serializable dict instead of CertificateResult to avoid
+    Returns a serializable dict (via WorkerResult.to_dict()) to avoid
     pickling issues with complex objects across process boundaries.
     """
     # Import here to avoid circular imports and ensure fresh state in worker
@@ -164,30 +172,27 @@ def _process_certificate_worker(
         manager = CertificateManager(config)
         result = manager.process_domain(domain_config, key_type, domain_actions)
 
-        return {
-            "domain": result.domain,
-            "key_type": str(result.key_type),
-            "success": result.success,
-            "renewed": result.renewed,
-            "cert_path": result.cert_path,
-            "key_path": result.key_path,
-            "error_message": result.error_message,
-            "all_domains": domain_config.all_domains,
-            "exception": None,
-        }
+        return WorkerResult(
+            domain=result.domain,
+            key_type=str(result.key_type),
+            success=result.success,
+            renewed=result.renewed,
+            cert_path=result.cert_path,
+            key_path=result.key_path,
+            error_message=result.error_message,
+            all_domains=domain_config.all_domains,
+        ).to_dict()
     except Exception as e:
         # Catch ALL exceptions to prevent worker crashes from propagating
-        return {
-            "domain": domain_config.primary_domain,
-            "key_type": str(key_type),
-            "success": False,
-            "renewed": True,  # We tried to renew
-            "cert_path": None,
-            "key_path": None,
-            "error_message": f"Worker exception: {e!s}",
-            "all_domains": domain_config.all_domains,
-            "exception": str(e),
-        }
+        return WorkerResult(
+            domain=domain_config.primary_domain,
+            key_type=str(key_type),
+            success=False,
+            renewed=True,  # We tried to renew
+            error_message=f"Worker exception: {e!s}",
+            all_domains=domain_config.all_domains,
+            exception=str(e),
+        ).to_dict()
 
 
 @dataclass
@@ -258,7 +263,7 @@ class CertificateExecutor:
     def process_batch(
         self,
         domains: list[DomainConfig],
-        domain_actions: dict,
+        domain_actions: DomainActions,
     ) -> RenewalSummary:
         """Process a batch of domains with both RSA and EC certificates.
 
@@ -302,7 +307,7 @@ class CertificateExecutor:
     def _process_sequential(
         self,
         work_items: list[WorkItem],
-        domain_actions: dict,
+        domain_actions: DomainActions,
         summary: RenewalSummary,
     ) -> RenewalSummary:
         """Process work items sequentially."""
@@ -431,25 +436,25 @@ class CertificateExecutor:
 
     def _dict_to_result(
         self,
-        result_dict: dict,
+        result_dict: dict[str, object],
         domain_lookup: dict[str, DomainConfig],
     ) -> CertificateResult:
         """Convert worker result dict back to CertificateResult."""
-        domain = result_dict["domain"]
-        domain_config = domain_lookup.get(domain)
+        worker_result = WorkerResult.from_dict(result_dict)
+        domain_config = domain_lookup.get(worker_result.domain)
 
         if domain_config is None:
             # Fallback: create minimal domain config
-            domain_config = DomainConfig(primary_domain=domain)
+            domain_config = DomainConfig(primary_domain=worker_result.domain)
 
         return CertificateResult(
             domain_config=domain_config,
-            key_type=KeyType.from_string(result_dict["key_type"]),
-            success=result_dict["success"],
-            renewed=result_dict["renewed"],
-            cert_path=result_dict["cert_path"],
-            key_path=result_dict["key_path"],
-            error_message=result_dict["error_message"],
+            key_type=KeyType.from_string(worker_result.key_type),
+            success=worker_result.success,
+            renewed=worker_result.renewed,
+            cert_path=worker_result.cert_path,
+            key_path=worker_result.key_path,
+            error_message=worker_result.error_message,
         )
 
 
@@ -467,6 +472,6 @@ def create_progress_printer(verbose: bool = False) -> Callable[[BatchProgress], 
         if verbose:
             for task_key, task in progress.tasks.items():
                 if task.status == TaskStatus.RUNNING:
-                    print(f"  [{task_key}] {task.status.name}")
+                    logger.debug(f"  [{task_key}] {task.status.name}")
 
     return printer

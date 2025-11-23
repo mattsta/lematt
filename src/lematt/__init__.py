@@ -21,11 +21,14 @@ from lematt.config import (
     ActionConfig,
     CertificateInfo,
     CertificateResult,
+    DomainActions,
     DomainConfig,
     KeyType,
     LemattConfig,
     RenewalSummary,
+    WorkerResult,
 )
+from lematt.config_loader import ConfigLoader, create_example_toml
 from lematt.crypto import (
     HAS_CRYPTOGRAPHY,
     create_csr,
@@ -52,10 +55,12 @@ __all__ = [
     "KeyType",
     "CertificateInfo",
     "DomainConfig",
+    "DomainActions",
     "ActionConfig",
     "LemattConfig",
     "CertificateResult",
     "RenewalSummary",
+    "WorkerResult",
     # Crypto
     "HAS_CRYPTOGRAPHY",
     "generate_private_key",
@@ -65,6 +70,9 @@ __all__ = [
     "CertificateManager",
     # Actions
     "ActionRunner",
+    # Config loader
+    "ConfigLoader",
+    "create_example_toml",
     # Executor
     "CertificateExecutor",
     "BatchProgress",

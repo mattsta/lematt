@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from lematt.config import ActionConfig, CertificateResult, LemattConfig
+from lematt.config import ActionConfig, CertificateResult, DomainActions, LemattConfig
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -32,15 +32,18 @@ class ActionRunner:
     """
 
     config: LemattConfig
-    domain_actions: dict[str, dict] = field(default_factory=dict)
-    domain_action_names: dict[str, dict] = field(default_factory=dict)
+    actions: DomainActions = field(default_factory=DomainActions)
     _prepare_processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
+
+    # Legacy properties for backward compatibility during transition
+    @property
+    def domain_actions(self) -> DomainActions:
+        """Get domain actions (for backward compatibility)."""
+        return self.actions
 
     def log(self, message: str, mode: str = "", update: bool = False) -> None:
         """Log a message with optional mode prefix."""
         if not message:
-            if not self.config.is_cron:
-                print("")
             return
 
         prefix = "[TEST] " if self.config.is_test else "> "
@@ -61,18 +64,15 @@ class ActionRunner:
         updaters = configparser.ConfigParser()
         updaters.read(f"{self.config.config_base}/actions.conf")
 
-        def extract_and_populate(
-            section_name: str,
-            override: configparser.SectionProxy,
-            actions: dict,
-        ) -> None:
-            if section_name in override:
-                commands = json.loads(override[section_name])
-                actions[section_name] = commands
+        def extract_commands(section_config: configparser.SectionProxy, key: str) -> list[str]:
+            """Extract command list from section config."""
+            if key in section_config:
+                return json.loads(section_config[key])
+            return []
 
         # Get default OCSP setting
         default_ocsp = False
-        if "ocspStapleRequired" in updaters["default"]:
+        if "default" in updaters and "ocspStapleRequired" in updaters["default"]:
             default_ocsp = updaters["default"].getboolean("ocspStapleRequired")
 
         # Validate sections
@@ -90,38 +90,38 @@ class ActionRunner:
         # Process all sections
         for section in updaters.sections():
             section_config = updaters[section]
-            actions: dict = {"actionName": section}
-            self.domain_action_names[section] = actions
 
-            if section not in ("default", "every"):
+            # Build ActionConfig for this section
+            action_config = ActionConfig(
+                name=section,
+                prepare_commands=extract_commands(section_config, "prepare"),
+                upload_certs_commands=extract_commands(section_config, "uploadCerts"),
+                upload_keys_commands=extract_commands(section_config, "uploadKeys"),
+                update_commands=extract_commands(section_config, "update"),
+                ocsp_staple_required=section_config.getboolean("ocspStapleRequired"),
+            )
+
+            if section == "default":
+                self.actions.default = action_config
+            elif section == "every":
+                self.actions.every = action_config
+            else:
+                # Get domains for this action section
                 domains = section_config["domains"].split()
-            else:
-                domains = []
-
-            # Extract action commands
-            extract_and_populate("prepare", section_config, actions)
-            extract_and_populate("update", section_config, actions)
-            extract_and_populate("uploadCerts", section_config, actions)
-            extract_and_populate("uploadKeys", section_config, actions)
-
-            actions["ocspStapleRequired"] = section_config.getboolean("ocspStapleRequired")
-
-            if section in ("default", "every"):
-                self.domain_actions[section] = actions
-            else:
+                action_config.domains = domains
                 for domain in domains:
-                    self.domain_actions[domain] = actions
+                    self.actions.domain_configs[domain] = action_config
 
-    def get_actions_for_domain(self, domain: str) -> dict:
+    def get_actions_for_domain(self, domain: str) -> ActionConfig:
         """Get the action configuration for a domain.
 
         Args:
             domain: The domain name.
 
         Returns:
-            Action configuration dictionary.
+            ActionConfig for the domain.
         """
-        return self.domain_actions.get(domain, self.domain_actions.get("default", {}))
+        return self.actions.get_for_domain(domain)
 
     def prepare_domain(self, domain: str) -> list[subprocess.Popen]:
         """Run prepare actions for a domain.
@@ -132,23 +132,23 @@ class ActionRunner:
         Returns:
             List of running Popen processes.
         """
-        actions = self.get_actions_for_domain(domain)
-        every_actions = self.domain_actions.get("every", {})
+        action_config = self.get_actions_for_domain(domain)
+        every_config = self.actions.every
 
         processes: list[subprocess.Popen] = []
 
-        def run_prepare(acts: dict) -> list[subprocess.Popen]:
-            if "prepare" not in acts:
+        def run_prepare(config: ActionConfig | None) -> list[subprocess.Popen]:
+            if config is None or not config.prepare_commands:
                 return []
             procs = []
-            for cmd in acts["prepare"]:
+            for cmd in config.prepare_commands:
                 cmd = cmd.replace("DOMAIN", domain)
                 self.log(f"Running: {cmd}", "CMD-ASYNC", update=True)
                 procs.append(subprocess.Popen(cmd.split()))
             return procs
 
-        processes.extend(run_prepare(actions))
-        processes.extend(run_prepare(every_actions))
+        processes.extend(run_prepare(action_config))
+        processes.extend(run_prepare(every_config))
 
         return processes
 
@@ -262,14 +262,11 @@ class ActionRunner:
 
         # Group updates by action name for deduplication
         combined_results: dict[str, set[tuple[str, ...]]] = collections.defaultdict(set)
-        has_every = "every" in self.domain_action_names
+        has_every = self.actions.every is not None
 
         for domain, domain_tuple in updated_certs.items():
-            if domain in self.domain_actions:
-                action_name = self.domain_actions[domain]["actionName"]
-                combined_results[action_name].add(domain_tuple)
-            else:
-                combined_results["default"].add(domain_tuple)
+            action_config = self.actions.get_for_domain(domain)
+            combined_results[action_config.name].add(domain_tuple)
 
             if has_every:
                 combined_results["every"].add(domain_tuple)
@@ -278,20 +275,22 @@ class ActionRunner:
             self.log("Copying keys and certs then reloading services...", "action", update=True)
 
         # Run actions for each group
+        action_configs = self.actions.all_action_names()
         for section_name, domain_tuples in combined_results.items():
-            self._run_uploads_and_updates(domain_tuples, self.domain_action_names[section_name])
+            if section_name in action_configs:
+                self._run_uploads_and_updates(domain_tuples, action_configs[section_name])
             self.log("")
 
     def _run_uploads_and_updates(
         self,
         domain_tuples: set[tuple[str, ...]],
-        actions: dict,
+        action_config: ActionConfig,
     ) -> None:
         """Run upload and update actions for a set of domains.
 
         Args:
             domain_tuples: Set of domain tuples (each tuple is domains on one cert).
-            actions: Action configuration dictionary.
+            action_config: ActionConfig with commands to run.
         """
         # Build replacement patterns
         # Use shlex.quote for domain names, but preserve glob pattern
@@ -330,29 +329,26 @@ class ActionRunner:
                 descriptions.append(domains[0])
 
         self.log(
-            f"Executing [{actions['actionName']}] for {', '.join(descriptions)}",
+            f"Executing [{action_config.name}] for {', '.join(descriptions)}",
             "action",
             update=True,
         )
 
         # Run upload certs
-        if "uploadCerts" in actions:
-            for upload in actions["uploadCerts"]:
-                cmd = upload.replace("CERTS", replace_cert)
-                self.run_command(cmd, action_type="uploadCerts")
+        for upload in action_config.upload_certs_commands:
+            cmd = upload.replace("CERTS", replace_cert)
+            self.run_command(cmd, action_type="uploadCerts")
 
         # Run upload keys
-        if "uploadKeys" in actions:
-            for upload in actions["uploadKeys"]:
-                cmd = upload.replace("KEYS", replace_key)
-                self.run_command(cmd, action_type="uploadKeys")
+        for upload in action_config.upload_keys_commands:
+            cmd = upload.replace("KEYS", replace_key)
+            self.run_command(cmd, action_type="uploadKeys")
 
         # Run update commands (service reloads, etc.)
-        if "update" in actions:
-            for action in actions["update"]:
-                action = action.replace("DOMAINS_CN", replace_domains_cn)
-                action = action.replace("DOMAINS_ALL", replace_domains_all)
-                self.run_command(action, action_type="update")
+        for action in action_config.update_commands:
+            action = action.replace("DOMAINS_CN", replace_domains_cn)
+            action = action.replace("DOMAINS_ALL", replace_domains_all)
+            self.run_command(action, action_type="update")
 
     @staticmethod
     def _sort_by_domain(domain: str) -> tuple[str, ...]:
@@ -369,7 +365,7 @@ class ActionRunner:
         return tuple(parts[1:])
 
     def to_action_config(self, domain: str) -> ActionConfig:
-        """Convert internal action dict to ActionConfig dataclass.
+        """Get ActionConfig for a domain.
 
         Args:
             domain: Domain to get configuration for.
@@ -377,12 +373,4 @@ class ActionRunner:
         Returns:
             ActionConfig instance.
         """
-        actions = self.get_actions_for_domain(domain)
-        return ActionConfig(
-            name=actions.get("actionName", "default"),
-            prepare_commands=actions.get("prepare", []),
-            upload_certs_commands=actions.get("uploadCerts", []),
-            upload_keys_commands=actions.get("uploadKeys", []),
-            update_commands=actions.get("update", []),
-            ocsp_staple_required=actions.get("ocspStapleRequired", False),
-        )
+        return self.get_actions_for_domain(domain)
