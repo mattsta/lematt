@@ -10,6 +10,7 @@ Features:
 - Flexible deployment actions (rsync, ssh, service reloads)
 - Native cryptography support (optional) for ~5x performance
 - Test mode with LE staging endpoint
+- Robust concurrent processing with error isolation and rate limiting
 """
 
 __version__ = "2.0.0"
@@ -31,11 +32,22 @@ from lematt.crypto import (
     generate_private_key,
     get_certificate_info,
 )
+from lematt.executor import (
+    BatchProgress,
+    CertificateExecutor,
+    RateLimiter,
+    TaskProgress,
+    TaskStatus,
+)
+from lematt.log import logger, setup_logging
 from lematt.manager import CertificateManager
 
 __all__ = [
     # Version
     "__version__",
+    # Logging
+    "logger",
+    "setup_logging",
     # Config dataclasses
     "KeyType",
     "CertificateInfo",
@@ -53,4 +65,10 @@ __all__ = [
     "CertificateManager",
     # Actions
     "ActionRunner",
+    # Executor
+    "CertificateExecutor",
+    "BatchProgress",
+    "TaskProgress",
+    "TaskStatus",
+    "RateLimiter",
 ]
