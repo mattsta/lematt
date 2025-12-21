@@ -62,9 +62,7 @@ def generate_service_unit(config: SystemdConfig) -> str:
     # Build ExecStartPost for notifications if configured
     exec_post_lines = []
     if config.notify_on_success and config.notify_command:
-        exec_post_lines.append(
-            f"ExecStartPost=-{config.notify_command} success"
-        )
+        exec_post_lines.append(f"ExecStartPost=-{config.notify_command} success")
 
     # Build the unit file
     lines = [
@@ -86,42 +84,52 @@ def generate_service_unit(config: SystemdConfig) -> str:
 
     # Add failure notification
     if config.notify_on_failure and config.notify_command:
-        lines.append(f"ExecStopPost=-/bin/sh -c 'if [ \"$SERVICE_RESULT\" != \"success\" ]; then {config.notify_command} failure; fi'")
+        lines.append(
+            f'ExecStopPost=-/bin/sh -c \'if [ "$SERVICE_RESULT" != "success" ]; then {config.notify_command} failure; fi\''
+        )
 
     # Resource limits
-    lines.extend([
-        "",
-        "# Resource limits",
-        f"MemoryMax={config.memory_max}",
-        f"CPUQuota={config.cpu_quota}",
-    ])
+    lines.extend(
+        [
+            "",
+            "# Resource limits",
+            f"MemoryMax={config.memory_max}",
+            f"CPUQuota={config.cpu_quota}",
+        ]
+    )
 
     # Security hardening
-    lines.extend([
-        "",
-        "# Security hardening",
-        f"PrivateTmp={str(config.private_tmp).lower()}",
-        f"ProtectSystem={config.protect_system}",
-        f"ProtectHome={str(config.protect_home).lower()}",
-        f"NoNewPrivileges={str(config.no_new_privileges).lower()}",
-        "ReadWritePaths=/etc/lematt",
-        "ReadWritePaths=/var/www/.well-known/acme-challenge",
-    ])
+    lines.extend(
+        [
+            "",
+            "# Security hardening",
+            f"PrivateTmp={str(config.private_tmp).lower()}",
+            f"ProtectSystem={config.protect_system}",
+            f"ProtectHome={str(config.protect_home).lower()}",
+            f"NoNewPrivileges={str(config.no_new_privileges).lower()}",
+            "ReadWritePaths=/etc/lematt",
+            "ReadWritePaths=/var/www/.well-known/acme-challenge",
+        ]
+    )
 
     # Environment for structured logging
-    lines.extend([
-        "",
-        "# Logging",
-        "StandardOutput=journal",
-        "StandardError=journal",
-        f"SyslogIdentifier={config.service_name}",
-    ])
+    lines.extend(
+        [
+            "",
+            "# Logging",
+            "StandardOutput=journal",
+            "StandardError=journal",
+            f"SyslogIdentifier={config.service_name}",
+        ]
+    )
 
-    lines.extend([
-        "",
-        "[Install]",
-        "WantedBy=multi-user.target",
-    ])
+    lines.extend(
+        [
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+        ]
+    )
 
     return "\n".join(lines) + "\n"
 
@@ -147,7 +155,7 @@ def generate_timer_unit(config: SystemdConfig) -> str:
 
 def generate_notification_script() -> str:
     """Generate a notification helper script."""
-    return '''#!/bin/bash
+    return """#!/bin/bash
 # Lematt notification helper script
 # Usage: lematt-notify.sh <success|failure> [message]
 
@@ -251,12 +259,12 @@ run_custom
 
 # Log to journald
 logger -t lematt-notify "Certificate renewal $STATUS: $MESSAGE"
-'''
+"""
 
 
 def generate_notify_config() -> str:
     """Generate an example notification configuration file."""
-    return '''# Lematt notification configuration
+    return """# Lematt notification configuration
 # Uncomment and configure the notification methods you want to use
 
 # Email notification (requires mail command configured)
@@ -274,7 +282,7 @@ def generate_notify_config() -> str:
 
 # Custom command (receives: status message hostname timestamp)
 # NOTIFY_CUSTOM_CMD="/usr/local/bin/my-notify-script.sh"
-'''
+"""
 
 
 @dataclass
@@ -430,8 +438,12 @@ class SystemdInstaller:
 
             # Get next trigger time
             proc = subprocess.run(
-                ["systemctl", "show", f"{self.config.service_name}.timer",
-                 "--property=NextElapseUSecRealtime"],
+                [
+                    "systemctl",
+                    "show",
+                    f"{self.config.service_name}.timer",
+                    "--property=NextElapseUSecRealtime",
+                ],
                 capture_output=True,
                 text=True,
             )
@@ -442,8 +454,12 @@ class SystemdInstaller:
 
             # Get last trigger time
             proc = subprocess.run(
-                ["systemctl", "show", f"{self.config.service_name}.timer",
-                 "--property=LastTriggerUSec"],
+                [
+                    "systemctl",
+                    "show",
+                    f"{self.config.service_name}.timer",
+                    "--property=LastTriggerUSec",
+                ],
                 capture_output=True,
                 text=True,
             )

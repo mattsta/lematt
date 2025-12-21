@@ -212,7 +212,9 @@ class WorkerResult:
             renewed=bool(data["renewed"]),
             cert_path=data.get("cert_path") if data.get("cert_path") else None,  # type: ignore[arg-type]
             key_path=data.get("key_path") if data.get("key_path") else None,  # type: ignore[arg-type]
-            error_message=data.get("error_message") if data.get("error_message") else None,  # type: ignore[arg-type]
+            error_message=data.get("error_message")
+            if data.get("error_message")
+            else None,  # type: ignore[arg-type]
             all_domains=list(data.get("all_domains", [])),  # type: ignore[arg-type]
             exception=data.get("exception") if data.get("exception") else None,  # type: ignore[arg-type]
         )
@@ -266,7 +268,9 @@ class LemattConfig:
     def reauthorize_timedelta(self) -> timedelta:
         """Get the reauthorization window as a timedelta."""
         if self.generate_new_certs_after_days > 0:
-            return timedelta(days=90) - timedelta(days=self.generate_new_certs_after_days)
+            return timedelta(days=90) - timedelta(
+                days=self.generate_new_certs_after_days
+            )
         return timedelta(days=self.reauthorize_days)
 
     def get_subdir(self, subdir: str) -> str:

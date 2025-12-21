@@ -397,10 +397,10 @@ ocsp_staple_required = true
 ```
 """,
         examples=[
-            '[[domains]]',
+            "[[domains]]",
             'primary_domain = "example.com"',
             'san_domains = ["www.example.com", "mail.example.com"]',
-            'ocsp_staple_required = true',
+            "ocsp_staple_required = true",
         ],
         see_also=["configuration", "certificates", "actions"],
         keywords=["domain", "san", "certificate", "subdomain"],
@@ -661,7 +661,7 @@ NOTIFY_CUSTOM_CMD="/usr/local/bin/my-notify.sh"
 ```
 """,
         examples=[
-            '# /etc/lematt/notify.conf',
+            "# /etc/lematt/notify.conf",
             'NOTIFY_EMAIL="ops@example.com"',
             'NOTIFY_WEBHOOK="https://hooks.slack.com/..."',
             'NTFY_TOPIC="infra-alerts"',

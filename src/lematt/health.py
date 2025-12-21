@@ -135,8 +135,10 @@ class HealthChecker:
         try:
             result = subprocess.run(
                 [
-                    "openssl", "x509",
-                    "-in", str(cert_path),
+                    "openssl",
+                    "x509",
+                    "-in",
+                    str(cert_path),
                     "-noout",
                     "-dates",
                     "-issuer",
@@ -289,7 +291,9 @@ class HealthChecker:
                 message = f"Live certificate EXPIRED {abs(days_until_expiry)} days ago"
             elif days_until_expiry < self.critical_days:
                 status = HealthStatus.CRITICAL
-                message = f"Live certificate expires in {days_until_expiry} days (CRITICAL)"
+                message = (
+                    f"Live certificate expires in {days_until_expiry} days (CRITICAL)"
+                )
             elif days_until_expiry < self.warning_days:
                 status = HealthStatus.WARNING
                 message = f"Live certificate expires in {days_until_expiry} days"
@@ -346,6 +350,7 @@ class HealthChecker:
             for key_type in key_types:
                 # Construct cert path based on config
                 from .config import KeyType
+
                 kt = KeyType.from_string(key_type)
                 cert_path = Path(self.config.get_cert_path(domain_config, kt))
 
@@ -359,9 +364,15 @@ class HealthChecker:
                 # Track worst status
                 if health.status == HealthStatus.CRITICAL:
                     worst_status = HealthStatus.CRITICAL
-                elif health.status == HealthStatus.WARNING and worst_status != HealthStatus.CRITICAL:
+                elif (
+                    health.status == HealthStatus.WARNING
+                    and worst_status != HealthStatus.CRITICAL
+                ):
                     worst_status = HealthStatus.WARNING
-                elif health.status == HealthStatus.UNKNOWN and worst_status == HealthStatus.HEALTHY:
+                elif (
+                    health.status == HealthStatus.UNKNOWN
+                    and worst_status == HealthStatus.HEALTHY
+                ):
                     worst_status = HealthStatus.UNKNOWN
 
         # Generate summary
@@ -450,13 +461,17 @@ class PrometheusMetrics:
         for cert in self.health.certificates:
             if cert.days_until_expiry is not None:
                 labels = f'domain="{cert.domain}",key_type="{cert.key_type}"'
-                lines.append(f"lematt_certificate_expiry_days{{{labels}}} {cert.days_until_expiry}")
+                lines.append(
+                    f"lematt_certificate_expiry_days{{{labels}}} {cert.days_until_expiry}"
+                )
 
-        lines.extend([
-            "",
-            "# HELP lematt_certificate_status Certificate health status (0=healthy, 1=warning, 2=critical, 3=unknown)",
-            "# TYPE lematt_certificate_status gauge",
-        ])
+        lines.extend(
+            [
+                "",
+                "# HELP lematt_certificate_status Certificate health status (0=healthy, 1=warning, 2=critical, 3=unknown)",
+                "# TYPE lematt_certificate_status gauge",
+            ]
+        )
 
         status_map = {
             HealthStatus.HEALTHY: 0,
@@ -470,19 +485,21 @@ class PrometheusMetrics:
             value = status_map.get(cert.status, 3)
             lines.append(f"lematt_certificate_status{{{labels}}} {value}")
 
-        lines.extend([
-            "",
-            "# HELP lematt_health_check_timestamp_seconds Unix timestamp of last health check",
-            "# TYPE lematt_health_check_timestamp_seconds gauge",
-            f"lematt_health_check_timestamp_seconds {self.health.checked_at.timestamp():.0f}",
-            "",
-            "# HELP lematt_certificates_total Total number of certificates by status",
-            "# TYPE lematt_certificates_total gauge",
-            f'lematt_certificates_total{{status="healthy"}} {self.health.healthy_count}',
-            f'lematt_certificates_total{{status="warning"}} {self.health.warning_count}',
-            f'lematt_certificates_total{{status="critical"}} {self.health.critical_count}',
-            f'lematt_certificates_total{{status="unknown"}} {self.health.unknown_count}',
-        ])
+        lines.extend(
+            [
+                "",
+                "# HELP lematt_health_check_timestamp_seconds Unix timestamp of last health check",
+                "# TYPE lematt_health_check_timestamp_seconds gauge",
+                f"lematt_health_check_timestamp_seconds {self.health.checked_at.timestamp():.0f}",
+                "",
+                "# HELP lematt_certificates_total Total number of certificates by status",
+                "# TYPE lematt_certificates_total gauge",
+                f'lematt_certificates_total{{status="healthy"}} {self.health.healthy_count}',
+                f'lematt_certificates_total{{status="warning"}} {self.health.warning_count}',
+                f'lematt_certificates_total{{status="critical"}} {self.health.critical_count}',
+                f'lematt_certificates_total{{status="unknown"}} {self.health.unknown_count}',
+            ]
+        )
 
         return "\n".join(lines) + "\n"
 
@@ -509,7 +526,7 @@ def write_health_status_file(
 
 def create_healthcheck_script() -> str:
     """Generate a simple healthcheck script for external monitoring."""
-    return '''#!/bin/bash
+    return """#!/bin/bash
 # Lematt certificate health check script
 # Returns exit code based on certificate health:
 #   0 = all healthy
@@ -544,4 +561,4 @@ case "$STATUS" in
         exit 3
         ;;
 esac
-'''
+"""

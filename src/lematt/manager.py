@@ -47,7 +47,9 @@ class PrepareActionRunner:
     config: LemattConfig
     _processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
 
-    def prepare_domain(self, domain: str, domain_actions: DomainActions) -> list[subprocess.Popen]:
+    def prepare_domain(
+        self, domain: str, domain_actions: DomainActions
+    ) -> list[subprocess.Popen]:
         """Run prepare actions for a domain before cert request.
 
         Args:
@@ -275,7 +277,9 @@ class CertificateManager:
                 self.log(f"Generating EC {self.config.ec_curve} key...", str(key_type))
                 cmd = ["openssl", "ecparam", "-genkey", "-name", self.config.ec_curve]
             else:
-                self.log(f"Generating RSA {self.config.rsa_key_bits} key...", str(key_type))
+                self.log(
+                    f"Generating RSA {self.config.rsa_key_bits} key...", str(key_type)
+                )
                 cmd = ["openssl", "genrsa", str(self.config.rsa_key_bits)]
 
             result = subprocess.run(cmd, capture_output=True, check=True)
@@ -405,7 +409,9 @@ subjectAltName={san_config}"""
         # Build file paths
         filename_base = domain_config.filename_base
         private_key = self.get_customized_name("key", filename_base, "key", key_type)
-        cert = self.get_customized_name("cert", filename_base, "cert-combined", key_type)
+        cert = self.get_customized_name(
+            "cert", filename_base, "cert-combined", key_type
+        )
         csr = self.get_customized_name("csr", filename_base, "csr", key_type, "csr")
 
         self.log(f"Checking certificate for {domain_config}...", str(key_type))
@@ -431,9 +437,17 @@ subjectAltName={san_config}"""
 
         # Dry-run mode
         if self.config.is_dry_run:
-            self.log(f"[DRY-RUN] Would generate key: {private_key}", str(key_type), update=True)
+            self.log(
+                f"[DRY-RUN] Would generate key: {private_key}",
+                str(key_type),
+                update=True,
+            )
             self.log(f"[DRY-RUN] Would generate CSR: {csr}", str(key_type), update=True)
-            self.log(f"[DRY-RUN] Would request certificate: {cert}", str(key_type), update=True)
+            self.log(
+                f"[DRY-RUN] Would request certificate: {cert}",
+                str(key_type),
+                update=True,
+            )
             return CertificateResult(
                 domain_config=domain_config,
                 key_type=key_type,
@@ -514,7 +528,9 @@ subjectAltName={san_config}"""
 
         # Create cert symlinks for SAN domains
         for domain in domain_config.san_domains:
-            single_domain_cert = self.get_customized_name("cert", domain, "cert-combined", key_type)
+            single_domain_cert = self.get_customized_name(
+                "cert", domain, "cert-combined", key_type
+            )
             self.create_atomic_symlink(
                 os.path.basename(cert),
                 single_domain_cert,
@@ -613,7 +629,9 @@ subjectAltName={san_config}"""
 
         return results
 
-    def show_status(self, domains: Sequence[DomainConfig], json_output: bool = False) -> dict | None:
+    def show_status(
+        self, domains: Sequence[DomainConfig], json_output: bool = False
+    ) -> dict | None:
         """Display status of all configured certificates.
 
         Args:
@@ -631,8 +649,12 @@ subjectAltName={san_config}"""
                 "summary": {
                     "total": len(status_data),
                     "ok": sum(1 for s in status_data if s["status"] == "ok"),
-                    "renew_soon": sum(1 for s in status_data if s["status"] == "renew_soon"),
-                    "critical": sum(1 for s in status_data if s["status"] == "critical"),
+                    "renew_soon": sum(
+                        1 for s in status_data if s["status"] == "renew_soon"
+                    ),
+                    "critical": sum(
+                        1 for s in status_data if s["status"] == "critical"
+                    ),
                     "expired": sum(1 for s in status_data if s["status"] == "expired"),
                     "missing": sum(1 for s in status_data if s["status"] == "missing"),
                 },
@@ -645,7 +667,9 @@ subjectAltName={san_config}"""
         if HAS_CRYPTOGRAPHY:
             logger.info("(Using native cryptography library)")
         else:
-            logger.info("(Using openssl subprocess - install 'cryptography' for better performance)")
+            logger.info(
+                "(Using openssl subprocess - install 'cryptography' for better performance)"
+            )
         logger.info("=" * 80)
         logger.info(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
         logger.info("-" * 80)
@@ -663,9 +687,15 @@ subjectAltName={san_config}"""
         for entry in status_data:
             domain_with_type = f"{entry['domain']} ({entry['key_type'].upper()})"
             expires_str = entry["expires"][:10] if entry["expires"] else "N/A"
-            days_left = str(entry["days_until_expiry"]) if entry["days_until_expiry"] is not None else "N/A"
+            days_left = (
+                str(entry["days_until_expiry"])
+                if entry["days_until_expiry"] is not None
+                else "N/A"
+            )
             status = status_icons.get(entry["status"], "❓ UNKNOWN")
-            logger.info(f"{domain_with_type:<40} {expires_str:<20} {days_left:<12} {status}")
+            logger.info(
+                f"{domain_with_type:<40} {expires_str:<20} {days_left:<12} {status}"
+            )
 
         logger.info("=" * 80)
         return None

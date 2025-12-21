@@ -109,7 +109,9 @@ class ReportGenerator:
                         domain=domain_config.primary_domain,
                         key_type=str(key_type),
                         status=str(health_item.status) if health_item else "unknown",
-                        days_until_expiry=health_item.days_until_expiry if health_item else None,
+                        days_until_expiry=health_item.days_until_expiry
+                        if health_item
+                        else None,
                         not_after=health_item.not_after if health_item else None,
                         cert_path=cert_path,
                         key_path=key_path,
@@ -274,12 +276,19 @@ class ReportRenderer:
             icon, style = priority_styles.get(item.priority, ("?", StatusStyle.UNKNOWN))
             priority_text = Text(f"{icon} {item.priority}", style=style)
 
-            expiry = item.current_expiry.strftime("%Y-%m-%d") if item.current_expiry else "-"
-            renewal = item.renewal_date.strftime("%Y-%m-%d") if item.renewal_date else "-"
+            expiry = (
+                item.current_expiry.strftime("%Y-%m-%d") if item.current_expiry else "-"
+            )
+            renewal = (
+                item.renewal_date.strftime("%Y-%m-%d") if item.renewal_date else "-"
+            )
 
             if item.days_until_renewal is not None:
                 if item.days_until_renewal < 0:
-                    days_text = Text(f"{item.days_until_renewal} (overdue)", style=StatusStyle.CRITICAL)
+                    days_text = Text(
+                        f"{item.days_until_renewal} (overdue)",
+                        style=StatusStyle.CRITICAL,
+                    )
                 else:
                     days_text = Text(str(item.days_until_renewal), style=style)
             else:
@@ -334,7 +343,9 @@ class ReportRenderer:
                     parts.append("upload")
                 if action.update_commands:
                     parts.append("update")
-                action_text.append(", ".join(parts) if parts else "[dim]no commands[/dim]")
+                action_text.append(
+                    ", ".join(parts) if parts else "[dim]no commands[/dim]"
+                )
                 actions_node.add(action_text)
 
         return Panel(tree, border_style="cyan")
@@ -364,7 +375,10 @@ class ReportRenderer:
 
         # Summary
         content.append(f"{health.summary}\n", style="dim")
-        content.append(f"Checked at: {health.checked_at.strftime('%Y-%m-%d %H:%M:%S')}", style="dim")
+        content.append(
+            f"Checked at: {health.checked_at.strftime('%Y-%m-%d %H:%M:%S')}",
+            style="dim",
+        )
 
         return Panel(
             content,
@@ -392,7 +406,9 @@ class ReportRenderer:
             return table
 
         for name, action in config.actions.items():
-            domains_str = ", ".join(action.domains[:3]) if action.domains else "[dim]all[/dim]"
+            domains_str = (
+                ", ".join(action.domains[:3]) if action.domains else "[dim]all[/dim]"
+            )
             if len(action.domains) > 3:
                 domains_str += f" (+{len(action.domains) - 3})"
 
@@ -505,8 +521,12 @@ class Report:
                 {
                     "domain": item.domain,
                     "key_type": item.key_type,
-                    "current_expiry": item.current_expiry.isoformat() if item.current_expiry else None,
-                    "renewal_date": item.renewal_date.isoformat() if item.renewal_date else None,
+                    "current_expiry": item.current_expiry.isoformat()
+                    if item.current_expiry
+                    else None,
+                    "renewal_date": item.renewal_date.isoformat()
+                    if item.renewal_date
+                    else None,
                     "days_until_renewal": item.days_until_renewal,
                     "priority": item.priority,
                 }
@@ -518,7 +538,9 @@ class Report:
                 "test_mode": self.config.test_mode,
                 "key_types": [str(kt) for kt in self.config.key_types],
                 "domain_count": len(self.config.domains),
-                "action_groups": list(self.config.actions.keys()) if self.config.actions else [],
+                "action_groups": list(self.config.actions.keys())
+                if self.config.actions
+                else [],
             },
         }
 
@@ -545,31 +567,39 @@ class Report:
 
         # Health summary
         if self.health:
-            lines.extend([
-                "## Health Summary",
-                "",
-                f"**Overall Status:** {self.health.status.name}",
-                "",
-                f"- Healthy: {self.health.healthy_count}",
-                f"- Warning: {self.health.warning_count}",
-                f"- Critical: {self.health.critical_count}",
-                f"- Unknown: {self.health.unknown_count}",
-                "",
-                f"{self.health.summary}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Health Summary",
+                    "",
+                    f"**Overall Status:** {self.health.status.name}",
+                    "",
+                    f"- Healthy: {self.health.healthy_count}",
+                    f"- Warning: {self.health.warning_count}",
+                    f"- Critical: {self.health.critical_count}",
+                    f"- Unknown: {self.health.unknown_count}",
+                    "",
+                    f"{self.health.summary}",
+                    "",
+                ]
+            )
 
         # Certificate inventory
-        lines.extend([
-            "## Certificate Inventory",
-            "",
-            "| Domain | Type | Status | Expires | Days | SANs |",
-            "|--------|------|--------|---------|------|------|",
-        ])
+        lines.extend(
+            [
+                "## Certificate Inventory",
+                "",
+                "| Domain | Type | Status | Expires | Days | SANs |",
+                "|--------|------|--------|---------|------|------|",
+            ]
+        )
 
         for item in inventory:
             expires = item.not_after.strftime("%Y-%m-%d") if item.not_after else "-"
-            days = str(item.days_until_expiry) if item.days_until_expiry is not None else "-"
+            days = (
+                str(item.days_until_expiry)
+                if item.days_until_expiry is not None
+                else "-"
+            )
             sans = str(len(item.san_domains)) if item.san_domains else "0"
             lines.append(
                 f"| {item.domain} | {item.key_type.upper()} | {item.status} | "
@@ -579,17 +609,27 @@ class Report:
         lines.append("")
 
         # Renewal schedule
-        lines.extend([
-            "## Renewal Schedule",
-            "",
-            "| Priority | Domain | Type | Expiry | Renewal | Days |",
-            "|----------|--------|------|--------|---------|------|",
-        ])
+        lines.extend(
+            [
+                "## Renewal Schedule",
+                "",
+                "| Priority | Domain | Type | Expiry | Renewal | Days |",
+                "|----------|--------|------|--------|---------|------|",
+            ]
+        )
 
         for item in schedule:
-            expiry = item.current_expiry.strftime("%Y-%m-%d") if item.current_expiry else "-"
-            renewal = item.renewal_date.strftime("%Y-%m-%d") if item.renewal_date else "-"
-            days = str(item.days_until_renewal) if item.days_until_renewal is not None else "-"
+            expiry = (
+                item.current_expiry.strftime("%Y-%m-%d") if item.current_expiry else "-"
+            )
+            renewal = (
+                item.renewal_date.strftime("%Y-%m-%d") if item.renewal_date else "-"
+            )
+            days = (
+                str(item.days_until_renewal)
+                if item.days_until_renewal is not None
+                else "-"
+            )
             lines.append(
                 f"| {item.priority} | {item.domain} | {item.key_type.upper()} | "
                 f"{expiry} | {renewal} | {days} |"
@@ -598,16 +638,18 @@ class Report:
         lines.append("")
 
         # Configuration
-        lines.extend([
-            "## Configuration",
-            "",
-            f"- Certificate Directory: `{self.config.cert_directory}`",
-            f"- Webroot Path: `{self.config.webroot_path}`",
-            f"- Test Mode: {self.config.test_mode}",
-            f"- Key Types: {', '.join(str(kt) for kt in self.config.key_types)}",
-            f"- Domains: {len(self.config.domains)}",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Configuration",
+                "",
+                f"- Certificate Directory: `{self.config.cert_directory}`",
+                f"- Webroot Path: `{self.config.webroot_path}`",
+                f"- Test Mode: {self.config.test_mode}",
+                f"- Key Types: {', '.join(str(kt) for kt in self.config.key_types)}",
+                f"- Domains: {len(self.config.domains)}",
+                "",
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -617,7 +659,9 @@ class Report:
         path.write_text(self.to_markdown())
 
 
-def generate_quick_report(config: LemattConfig, health: SystemHealth | None = None) -> None:
+def generate_quick_report(
+    config: LemattConfig, health: SystemHealth | None = None
+) -> None:
     """Generate and print a quick summary report.
 
     Args:
