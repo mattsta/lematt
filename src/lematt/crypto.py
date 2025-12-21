@@ -101,7 +101,9 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
         # Extract SAN domains
         san_domains: list[str] = []
         try:
-            san_ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+            san_ext = cert.extensions.get_extension_for_oid(
+                ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+            )
             san_domains = [
                 name.value for name in san_ext.value if isinstance(name, x509.DNSName)
             ]
@@ -165,9 +167,11 @@ def generate_csr_native(
     primary_domain = domains[0]
     builder = x509.CertificateSigningRequestBuilder()
     builder = builder.subject_name(
-        x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, primary_domain),
-        ])
+        x509.Name(
+            [
+                x509.NameAttribute(NameOID.COMMON_NAME, primary_domain),
+            ]
+        )
     )
 
     # Always add SAN extension for consistency
@@ -258,7 +262,9 @@ def get_certificate_info(cert_path: str) -> CertificateInfo:
                     info.not_after = datetime.datetime.strptime(line[9:], ssl_date_fmt)
             elif line.startswith("notBefore="):
                 with contextlib.suppress(ValueError):
-                    info.not_before = datetime.datetime.strptime(line[10:], ssl_date_fmt)
+                    info.not_before = datetime.datetime.strptime(
+                        line[10:], ssl_date_fmt
+                    )
             elif line.startswith("subject="):
                 # Extract CN from subject
                 cn_match = re.search(r"CN\s*=\s*([^,/]+)", line)
@@ -315,7 +321,9 @@ def create_csr(
                 f.write(csr_bytes)
             return True
         except Exception as e:
-            logger.warning(f"Native CSR generation failed, falling back to openssl: {e}")
+            logger.warning(
+                f"Native CSR generation failed, falling back to openssl: {e}"
+            )
 
     # Fall back to openssl subprocess
     primary_domain = domains[0]

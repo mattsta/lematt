@@ -64,7 +64,9 @@ class ActionRunner:
         updaters = configparser.ConfigParser()
         updaters.read(f"{self.config.config_base}/actions.conf")
 
-        def extract_commands(section_config: configparser.SectionProxy, key: str) -> list[str]:
+        def extract_commands(
+            section_config: configparser.SectionProxy, key: str
+        ) -> list[str]:
             """Extract command list from section config."""
             if key in section_config:
                 return json.loads(section_config[key])
@@ -80,9 +82,13 @@ class ActionRunner:
             if section in updaters:
                 section_config = updaters[section]
                 if "domains" in section_config:
-                    raise ValueError(f"'domains' entry not allowed in section [{section}]")
+                    raise ValueError(
+                        f"'domains' entry not allowed in section [{section}]"
+                    )
                 if section == "every" and "ocspStapleRequired" in section_config:
-                    raise ValueError(f"'ocspStapleRequired' not allowed in section [{section}]")
+                    raise ValueError(
+                        f"'ocspStapleRequired' not allowed in section [{section}]"
+                    )
 
         # Set default OCSP for all sections
         updaters["DEFAULT"] = {"ocspStapleRequired": str(default_ocsp)}
@@ -227,7 +233,9 @@ class ActionRunner:
                 update=True,
             )
             if e.stderr:
-                self.log(f"[{action_type}] stderr: {e.stderr[:500]}", "ERROR", update=True)
+                self.log(
+                    f"[{action_type}] stderr: {e.stderr[:500]}", "ERROR", update=True
+                )
             return None
         except OSError as e:
             self.log(f"[{action_type}] OS ERROR: {command} - {e}", "ERROR", update=True)
@@ -272,13 +280,19 @@ class ActionRunner:
                 combined_results["every"].add(domain_tuple)
 
         if combined_results:
-            self.log("Copying keys and certs then reloading services...", "action", update=True)
+            self.log(
+                "Copying keys and certs then reloading services...",
+                "action",
+                update=True,
+            )
 
         # Run actions for each group
         action_configs = self.actions.all_action_names()
         for section_name, domain_tuples in combined_results.items():
             if section_name in action_configs:
-                self._run_uploads_and_updates(domain_tuples, action_configs[section_name])
+                self._run_uploads_and_updates(
+                    domain_tuples, action_configs[section_name]
+                )
             self.log("")
 
     def _run_uploads_and_updates(

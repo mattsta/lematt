@@ -10,7 +10,13 @@ from typing import Protocol
 
 from rich.console import Console, Group
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+)
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
@@ -163,7 +169,9 @@ def create_certificate_table(
     return table
 
 
-def create_health_summary(health_data: dict, config: DisplayConfig | None = None) -> Panel:
+def create_health_summary(
+    health_data: dict, config: DisplayConfig | None = None
+) -> Panel:
     """Create a health summary panel.
 
     Args:
@@ -331,9 +339,19 @@ def create_action_table(actions: dict, title: str = "Workflow Actions") -> Table
         if not domains_str:
             domains_str = "[dim]all[/dim]" if name == "default" else "[dim]-[/dim]"
 
-        prepare = "✓" if config.get("prepare") or config.get("prepare_commands") else "-"
-        upload = "✓" if (config.get("upload_certs") or config.get("upload_certs_commands") or
-                        config.get("upload_keys") or config.get("upload_keys_commands")) else "-"
+        prepare = (
+            "✓" if config.get("prepare") or config.get("prepare_commands") else "-"
+        )
+        upload = (
+            "✓"
+            if (
+                config.get("upload_certs")
+                or config.get("upload_certs_commands")
+                or config.get("upload_keys")
+                or config.get("upload_keys_commands")
+            )
+            else "-"
+        )
         update = "✓" if config.get("update") or config.get("update_commands") else "-"
 
         table.add_row(name, domains_str, prepare, upload, update)
@@ -348,7 +366,9 @@ def print_banner(version: str = "2.0.0", test_mode: bool = False) -> None:
         version: Version string
         test_mode: Whether in test mode
     """
-    mode_text = "[yellow]TEST MODE[/yellow]" if test_mode else "[green]PRODUCTION[/green]"
+    mode_text = (
+        "[yellow]TEST MODE[/yellow]" if test_mode else "[green]PRODUCTION[/green]"
+    )
 
     banner = Panel(
         f"[bold cyan]lematt[/bold cyan] v{version}\n"

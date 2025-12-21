@@ -35,33 +35,13 @@ from lematt.crypto import (
     generate_private_key,
     get_certificate_info,
 )
-from lematt.executor import (
-    BatchProgress,
-    CertificateExecutor,
-    RateLimiter,
-    TaskProgress,
-    TaskStatus,
-)
-from lematt.health import (
-    CertificateHealth,
-    HealthChecker,
-    HealthStatus,
-    PrometheusMetrics,
-    SystemHealth,
-)
-from lematt.log import logger, setup_logging
-from lematt.manager import CertificateManager
-from lematt.notifications import (
-    NotificationConfig,
-    NotificationEvent,
-    NotificationManager,
-)
-from lematt.systemd import (
-    PRESETS as SYSTEMD_PRESETS,
-)
-from lematt.systemd import (
-    SystemdConfig,
-    SystemdInstaller,
+from lematt.dashboard import (
+    Dashboard,
+    DashboardConfig,
+    DashboardState,
+    DashboardView,
+    create_simple_dashboard,
+    print_dashboard_snapshot,
 )
 
 # UI/Display components
@@ -81,13 +61,19 @@ from lematt.display import (
     print_success,
     print_warning,
 )
-from lematt.dashboard import (
-    Dashboard,
-    DashboardConfig,
-    DashboardState,
-    DashboardView,
-    create_simple_dashboard,
-    print_dashboard_snapshot,
+from lematt.executor import (
+    BatchProgress,
+    CertificateExecutor,
+    RateLimiter,
+    TaskProgress,
+    TaskStatus,
+)
+from lematt.health import (
+    CertificateHealth,
+    HealthChecker,
+    HealthStatus,
+    PrometheusMetrics,
+    SystemHealth,
 )
 from lematt.help import (
     HELP_TOPICS,
@@ -99,6 +85,13 @@ from lematt.help import (
     print_help,
     search_help,
 )
+from lematt.log import logger, setup_logging
+from lematt.manager import CertificateManager
+from lematt.notifications import (
+    NotificationConfig,
+    NotificationEvent,
+    NotificationManager,
+)
 from lematt.reports import (
     CertificateInventoryItem,
     RenewalScheduleItem,
@@ -108,6 +101,13 @@ from lematt.reports import (
     ReportRenderer,
     generate_full_report,
     generate_quick_report,
+)
+from lematt.systemd import (
+    PRESETS as SYSTEMD_PRESETS,
+)
+from lematt.systemd import (
+    SystemdConfig,
+    SystemdInstaller,
 )
 
 __all__ = [

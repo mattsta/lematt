@@ -118,10 +118,12 @@ class EmailBackend(NotificationBackend):
         ]
 
         if event.details:
-            lines.extend([
-                "",
-                "Details:",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "Details:",
+                ]
+            )
             for key, value in event.details.items():
                 lines.append(f"  {key}: {value}")
 
@@ -213,7 +215,11 @@ class WebhookBackend(NotificationBackend):
 
         fields = [
             {"title": "Host", "value": event.hostname, "short": True},
-            {"title": "Time", "value": event.timestamp.strftime("%Y-%m-%d %H:%M:%S"), "short": True},
+            {
+                "title": "Time",
+                "value": event.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                "short": True,
+            },
         ]
 
         for key, value in event.details.items():
@@ -239,7 +245,11 @@ class WebhookBackend(NotificationBackend):
 
         fields = [
             {"name": "Host", "value": event.hostname, "inline": True},
-            {"name": "Time", "value": event.timestamp.strftime("%Y-%m-%d %H:%M:%S"), "inline": True},
+            {
+                "name": "Time",
+                "value": event.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                "inline": True,
+            },
         ]
 
         for key, value in event.details.items():
@@ -338,7 +348,9 @@ class NtfyBackend(NotificationBackend):
         body = f"{event.message}\n\nHost: {event.hostname}"
 
         try:
-            req = Request(url, data=body.encode("utf-8"), headers=headers, method="POST")
+            req = Request(
+                url, data=body.encode("utf-8"), headers=headers, method="POST"
+            )
             with urlopen(req, timeout=30) as response:
                 return response.status < 400
         except URLError as e:
@@ -494,7 +506,9 @@ class NotificationManager:
             title="Certificate Renewal Failed",
             message=f"Failed to renew {len(failed_domains)} certificates",
             details={
-                "failed_domains": ", ".join(failed_domains[:10]),  # Limit for readability
+                "failed_domains": ", ".join(
+                    failed_domains[:10]
+                ),  # Limit for readability
                 "errors": "; ".join(error_messages[:5]),
                 "failed_count": len(failed_domains),
             },
@@ -557,32 +571,40 @@ class NotificationConfig:
         )
 
         if self.email_to:
-            manager.add_backend(EmailBackend(
-                to_address=self.email_to,
-                from_address=self.email_from,
-                smtp_host=self.email_smtp_host,
-                smtp_port=self.email_smtp_port,
-                use_sendmail=self.email_use_sendmail,
-            ))
+            manager.add_backend(
+                EmailBackend(
+                    to_address=self.email_to,
+                    from_address=self.email_from,
+                    smtp_host=self.email_smtp_host,
+                    smtp_port=self.email_smtp_port,
+                    use_sendmail=self.email_use_sendmail,
+                )
+            )
 
         if self.webhook_url:
-            manager.add_backend(WebhookBackend(
-                url=self.webhook_url,
-                format=self.webhook_format,
-            ))
+            manager.add_backend(
+                WebhookBackend(
+                    url=self.webhook_url,
+                    format=self.webhook_format,
+                )
+            )
 
         if self.pagerduty_key:
-            manager.add_backend(PagerDutyBackend(
-                routing_key=self.pagerduty_key,
-                only_on_failure=self.pagerduty_only_failure,
-            ))
+            manager.add_backend(
+                PagerDutyBackend(
+                    routing_key=self.pagerduty_key,
+                    only_on_failure=self.pagerduty_only_failure,
+                )
+            )
 
         if self.ntfy_topic:
-            manager.add_backend(NtfyBackend(
-                topic=self.ntfy_topic,
-                server=self.ntfy_server,
-                token=self.ntfy_token,
-            ))
+            manager.add_backend(
+                NtfyBackend(
+                    topic=self.ntfy_topic,
+                    server=self.ntfy_server,
+                    token=self.ntfy_token,
+                )
+            )
 
         if self.custom_command:
             manager.add_backend(CommandBackend(command=self.custom_command))

@@ -80,7 +80,11 @@ class BatchProgress:
             self.tasks[task_key].message = message
 
             # Update counters only on state transitions to completed states
-            if old_status not in (TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.CANCELLED):
+            if old_status not in (
+                TaskStatus.SUCCESS,
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+            ):
                 if status == TaskStatus.SUCCESS:
                     self.completed += 1
                     self.succeeded += 1
@@ -214,7 +218,9 @@ class CertificateExecutor:
 
     # Internal state with clean defaults
     progress: BatchProgress = field(default_factory=BatchProgress)
-    _shutdown_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    _shutdown_event: threading.Event = field(
+        default_factory=threading.Event, repr=False
+    )
     _original_sigint: signal.Handlers | None = field(default=None, repr=False)
     _original_sigterm: signal.Handlers | None = field(default=None, repr=False)
 
@@ -390,7 +396,9 @@ class CertificateExecutor:
                     item = future_to_item[future]
 
                     try:
-                        result_dict = future.result(timeout=300)  # 5 minute timeout per cert
+                        result_dict = future.result(
+                            timeout=300
+                        )  # 5 minute timeout per cert
                         result = self._dict_to_result(result_dict, domain_lookup)
                         summary.add_result(result)
 
@@ -404,7 +412,9 @@ class CertificateExecutor:
                             )
                     except TimeoutError:
                         logger.error(f"Timeout processing {item.task_key}")
-                        self.progress.update(item.task_key, TaskStatus.FAILED, "Timeout")
+                        self.progress.update(
+                            item.task_key, TaskStatus.FAILED, "Timeout"
+                        )
                         summary.add_result(
                             CertificateResult(
                                 domain_config=item.domain_config,

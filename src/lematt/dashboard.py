@@ -8,10 +8,10 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Callable
 
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -95,7 +95,9 @@ class DashboardRenderer:
             status.append(" LIVE ", style="bold white on green")
 
         if state.last_update:
-            status.append(f"  Last update: {state.last_update.strftime('%H:%M:%S')}", style="dim")
+            status.append(
+                f"  Last update: {state.last_update.strftime('%H:%M:%S')}", style="dim"
+            )
 
         header_content = Group(title, status)
         return Panel(header_content, style="cyan", height=4)

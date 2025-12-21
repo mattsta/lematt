@@ -149,12 +149,12 @@ lematt supports two configuration formats:
 
 ### Configuration Files
 
-| File | Format | Purpose |
-|------|--------|---------|
-| `lematt.toml` | TOML | All-in-one modern config (domains + actions + settings) |
-| `lematt.conf` | INI | Global settings |
-| `domains` | Text | Domain list with optional OCSP flags |
-| `actions.conf` | INI | Pre/post certificate actions |
+| File           | Format | Purpose                                                 |
+| -------------- | ------ | ------------------------------------------------------- |
+| `lematt.toml`  | TOML   | All-in-one modern config (domains + actions + settings) |
+| `lematt.conf`  | INI    | Global settings                                         |
+| `domains`      | Text   | Domain list with optional OCSP flags                    |
+| `actions.conf` | INI    | Pre/post certificate actions                            |
 
 lematt auto-detects format: if `lematt.toml` exists, it's used; otherwise falls back to INI files.
 
@@ -233,35 +233,35 @@ update = [
 
 #### `[config]` Section
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `challenge_dir` | string | required | Directory for ACME challenge files |
-| `account_key` | string | required | Path to Let's Encrypt account key |
-| `reauthorize_days` | float | 15.0 | Days before expiry to renew |
-| `generate_new_certs_after_days` | float | 0.0 | Renew based on cert age (0 = disabled) |
-| `always_generate_new_keys` | bool | false | Generate new keys on each renewal |
-| `key_bits_rsa` | int | 2048 | RSA key size |
-| `ec_curve` | string | "prime256v1" | EC curve name |
-| `rsa_tag` | string | "rsa{bits}" | Filename tag for RSA certs |
-| `curve_tag` | string | "{curve}" | Filename tag for EC certs |
+| Key                             | Type   | Default      | Description                            |
+| ------------------------------- | ------ | ------------ | -------------------------------------- |
+| `challenge_dir`                 | string | required     | Directory for ACME challenge files     |
+| `account_key`                   | string | required     | Path to Let's Encrypt account key      |
+| `reauthorize_days`              | float  | 15.0         | Days before expiry to renew            |
+| `generate_new_certs_after_days` | float  | 0.0          | Renew based on cert age (0 = disabled) |
+| `always_generate_new_keys`      | bool   | false        | Generate new keys on each renewal      |
+| `key_bits_rsa`                  | int    | 2048         | RSA key size                           |
+| `ec_curve`                      | string | "prime256v1" | EC curve name                          |
+| `rsa_tag`                       | string | "rsa{bits}"  | Filename tag for RSA certs             |
+| `curve_tag`                     | string | "{curve}"    | Filename tag for EC certs              |
 
 #### `[[domains]]` Array
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `primary` | string | required | Primary domain name (CN) |
-| `sans` | list[string] | [] | Subject Alternative Names |
-| `ocsp_staple_required` | bool | false | Enable OCSP Must-Staple extension |
+| Key                    | Type         | Default  | Description                       |
+| ---------------------- | ------------ | -------- | --------------------------------- |
+| `primary`              | string       | required | Primary domain name (CN)          |
+| `sans`                 | list[string] | []       | Subject Alternative Names         |
+| `ocsp_staple_required` | bool         | false    | Enable OCSP Must-Staple extension |
 
 #### `[actions.*]` Tables
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `domains` | list[string] | Domains using this action group (not for default/every) |
-| `prepare` | list[string] | Commands to run before cert request (killed after) |
-| `upload_certs` | list[string] | Commands to upload certificates (CERTS replaced) |
-| `upload_keys` | list[string] | Commands to upload private keys (KEYS replaced) |
-| `update` | list[string] | Commands to run after successful renewal |
+| Key            | Type         | Description                                             |
+| -------------- | ------------ | ------------------------------------------------------- |
+| `domains`      | list[string] | Domains using this action group (not for default/every) |
+| `prepare`      | list[string] | Commands to run before cert request (killed after)      |
+| `upload_certs` | list[string] | Commands to upload certificates (CERTS replaced)        |
+| `upload_keys`  | list[string] | Commands to upload private keys (KEYS replaced)         |
+| `update`       | list[string] | Commands to run after successful renewal                |
 
 ---
 
@@ -344,25 +344,27 @@ update: ["ssh mail-server 'systemctl reload postfix'"]
 
 ### Configuration Translation
 
-| INI (lematt.conf) | TOML (lematt.toml) |
-|-------------------|---------------------|
-| `reauthorizeDays: 15` | `reauthorize_days = 15` |
-| `challengeDropDir: /path` | `challenge_dir = "/path"` |
-| `accountKey: /path` | `account_key = "/path"` |
-| `keyBitsRSA: 2048` | `key_bits_rsa = 2048` |
-| `curve: prime256v1` | `ec_curve = "prime256v1"` |
-| `alwaysGenerateNewKeys: yes` | `always_generate_new_keys = true` |
+| INI (lematt.conf)              | TOML (lematt.toml)                  |
+| ------------------------------ | ----------------------------------- |
+| `reauthorizeDays: 15`          | `reauthorize_days = 15`             |
+| `challengeDropDir: /path`      | `challenge_dir = "/path"`           |
+| `accountKey: /path`            | `account_key = "/path"`             |
+| `keyBitsRSA: 2048`             | `key_bits_rsa = 2048`               |
+| `curve: prime256v1`            | `ec_curve = "prime256v1"`           |
+| `alwaysGenerateNewKeys: yes`   | `always_generate_new_keys = true`   |
 | `generateNewCertsAfterDays: 7` | `generate_new_certs_after_days = 7` |
 
 ### Domains Translation
 
 **INI (domains file):**
+
 ```
 example.com www mail +ocsp
 api.example.com
 ```
 
 **TOML:**
+
 ```toml
 [[domains]]
 primary = "example.com"
@@ -376,6 +378,7 @@ primary = "api.example.com"
 ### Actions Translation
 
 **INI (actions.conf):**
+
 ```ini
 [default]
 update: ["systemctl reload nginx"]
@@ -388,6 +391,7 @@ update: ["ssh mail reload-postfix"]
 ```
 
 **TOML:**
+
 ```toml
 [actions.default]
 update = ["systemctl reload nginx"]
@@ -401,14 +405,14 @@ update = ["ssh mail reload-postfix"]
 
 ### Key Differences
 
-| Aspect | INI | TOML |
-|--------|-----|------|
-| Lists | JSON syntax: `["a", "b"]` | Native TOML: `["a", "b"]` |
-| Booleans | `yes`/`no` | `true`/`false` |
-| Key naming | camelCase | snake_case |
-| OCSP config | In domains file: `+ocsp` | In `[[domains]]`: `ocsp_staple_required = true` |
-| Domains | Separate file | Inline `[[domains]]` array |
-| Actions | Separate file | Inline `[actions.*]` tables |
+| Aspect      | INI                       | TOML                                            |
+| ----------- | ------------------------- | ----------------------------------------------- |
+| Lists       | JSON syntax: `["a", "b"]` | Native TOML: `["a", "b"]`                       |
+| Booleans    | `yes`/`no`                | `true`/`false`                                  |
+| Key naming  | camelCase                 | snake_case                                      |
+| OCSP config | In domains file: `+ocsp`  | In `[[domains]]`: `ocsp_staple_required = true` |
+| Domains     | Separate file             | Inline `[[domains]]` array                      |
+| Actions     | Separate file             | Inline `[actions.*]` tables                     |
 
 ---
 
@@ -660,22 +664,22 @@ lematt --test --list-domains --json
 
 ### Action Types
 
-| Action | When | Variables | Purpose |
-|--------|------|-----------|---------|
-| `prepare` | Before cert request | `DOMAIN` | Start temp servers, open ports |
-| `upload_certs` | After successful renewal | `CERTS` | Copy certificates |
-| `upload_keys` | After successful renewal | `KEYS` | Copy private keys |
-| `update` | After successful renewal | `DOMAINS_CN`, `DOMAINS_ALL` | Reload services |
+| Action         | When                     | Variables                   | Purpose                        |
+| -------------- | ------------------------ | --------------------------- | ------------------------------ |
+| `prepare`      | Before cert request      | `DOMAIN`                    | Start temp servers, open ports |
+| `upload_certs` | After successful renewal | `CERTS`                     | Copy certificates              |
+| `upload_keys`  | After successful renewal | `KEYS`                      | Copy private keys              |
+| `update`       | After successful renewal | `DOMAINS_CN`, `DOMAINS_ALL` | Reload services                |
 
 ### Variable Expansion
 
-| Variable | Expands To | Example |
-|----------|------------|---------|
-| `DOMAIN` | Current domain being prepared | `mail.example.com` |
-| `CERTS` | Shell glob for cert files | `'/path/cert/example.com*' '/path/cert/www*'` |
-| `KEYS` | Shell glob for key files | `'/path/key/example.com*' '/path/key/www*'` |
-| `DOMAINS_CN` | Space-separated primary domains | `example.com other.com` |
-| `DOMAINS_ALL` | All domains including SANs | `example.com www.example.com mail.example.com` |
+| Variable      | Expands To                      | Example                                        |
+| ------------- | ------------------------------- | ---------------------------------------------- |
+| `DOMAIN`      | Current domain being prepared   | `mail.example.com`                             |
+| `CERTS`       | Shell glob for cert files       | `'/path/cert/example.com*' '/path/cert/www*'`  |
+| `KEYS`        | Shell glob for key files        | `'/path/key/example.com*' '/path/key/www*'`    |
+| `DOMAINS_CN`  | Space-separated primary domains | `example.com other.com`                        |
+| `DOMAINS_ALL` | All domains including SANs      | `example.com www.example.com mail.example.com` |
 
 ### Execution Order
 
@@ -689,11 +693,11 @@ lematt --test --list-domains --json
 
 ### Action Groups
 
-| Section | Behavior |
-|---------|----------|
-| `[default]` | Applied to domains without specific override |
-| `[every]` | Applied to ALL renewed certificates (in addition) |
-| `[custom-name]` | Applied only to domains listed in `domains` key |
+| Section         | Behavior                                          |
+| --------------- | ------------------------------------------------- |
+| `[default]`     | Applied to domains without specific override      |
+| `[every]`       | Applied to ALL renewed certificates (in addition) |
+| `[custom-name]` | Applied only to domains listed in `domains` key   |
 
 ---
 
@@ -704,12 +708,14 @@ OCSP Must-Staple is a certificate extension that tells browsers to require OCSP 
 ### Per-Domain Configuration
 
 **domains file (INI):**
+
 ```
 example.com www +ocsp           # Enable OCSP
 legacy.example.com -ocsp        # Explicitly disable (default)
 ```
 
 **TOML:**
+
 ```toml
 [[domains]]
 primary = "example.com"
@@ -722,6 +728,7 @@ ocsp_staple_required = true
 When using OCSP Must-Staple, configure your web server:
 
 **nginx:**
+
 ```nginx
 ssl_stapling on;
 ssl_stapling_verify on;
@@ -730,6 +737,7 @@ resolver_timeout 5s;
 ```
 
 **Apache:**
+
 ```apache
 SSLUseStapling On
 SSLStaplingCache shmcb:${APACHE_RUN_DIR}/ssl_stapling(32768)
@@ -749,6 +757,7 @@ uv sync --extra crypto
 ```
 
 Check if native crypto is active:
+
 ```bash
 lematt --test --status  # Shows "(Using native cryptography library)"
 ```
@@ -763,10 +772,10 @@ lematt --prod --parallel 5
 ```
 
 | Workers | 50 Certs Time | Speedup |
-|---------|---------------|---------|
-| 1 | ~120 seconds | 1x |
-| 5 | ~25 seconds | 5x |
-| 10 | ~15 seconds | 8x |
+| ------- | ------------- | ------- |
+| 1       | ~120 seconds  | 1x      |
+| 5       | ~25 seconds   | 5x      |
+| 10      | ~15 seconds   | 8x      |
 
 **Rate Limiting**: Built-in token bucket limits to 10 requests/second to respect Let's Encrypt API limits.
 
@@ -795,13 +804,13 @@ lematt --test --status
 
 ### Test vs Production
 
-| Aspect | `--test` | `--prod` |
-|--------|----------|----------|
-| Endpoint | staging-v02.api.letsencrypt.org | acme-v02.api.letsencrypt.org |
-| Rate limits | High (for testing) | Low (production limits) |
-| Certificates | Not trusted by browsers | Trusted |
-| File suffix | `.test.pem` | `.pem` |
-| Directory | `test/` | `prod/` |
+| Aspect       | `--test`                        | `--prod`                     |
+| ------------ | ------------------------------- | ---------------------------- |
+| Endpoint     | staging-v02.api.letsencrypt.org | acme-v02.api.letsencrypt.org |
+| Rate limits  | High (for testing)              | Low (production limits)      |
+| Certificates | Not trusted by browsers         | Trusted                      |
+| File suffix  | `.test.pem`                     | `.pem`                       |
+| Directory    | `test/`                         | `prod/`                      |
 
 ---
 
@@ -825,12 +834,12 @@ journalctl -u lematt-renew.service -f
 
 ### Timer Presets
 
-| Preset | Schedule | Delay | Description |
-|--------|----------|-------|-------------|
-| `default` | `*-*-* 00,12:00:00` | 1 hour | Twice daily (Let's Encrypt recommended) |
-| `aggressive` | `*-*-* 00,06,12,18:00:00` | 30 min | Four times daily |
-| `conservative` | `*-*-* 03:00:00` | 2 hours | Once daily at 3 AM |
-| `weekly` | `Mon *-*-* 03:00:00` | 1 hour | Weekly on Monday |
+| Preset         | Schedule                  | Delay   | Description                             |
+| -------------- | ------------------------- | ------- | --------------------------------------- |
+| `default`      | `*-*-* 00,12:00:00`       | 1 hour  | Twice daily (Let's Encrypt recommended) |
+| `aggressive`   | `*-*-* 00,06,12,18:00:00` | 30 min  | Four times daily                        |
+| `conservative` | `*-*-* 03:00:00`          | 2 hours | Once daily at 3 AM                      |
+| `weekly`       | `Mon *-*-* 03:00:00`      | 1 hour  | Weekly on Monday                        |
 
 ```bash
 # Install with preset
@@ -844,12 +853,12 @@ sudo lematt --prod --uninstall-systemd
 
 The installer creates:
 
-| File | Purpose |
-|------|---------|
+| File                                       | Purpose                              |
+| ------------------------------------------ | ------------------------------------ |
 | `/etc/systemd/system/lematt-renew.service` | Service unit with security hardening |
-| `/etc/systemd/system/lematt-renew.timer` | Timer unit with randomized delay |
-| `/usr/local/bin/lematt-notify.sh` | Notification helper script |
-| `/etc/lematt/notify.conf` | Notification configuration |
+| `/etc/systemd/system/lematt-renew.timer`   | Timer unit with randomized delay     |
+| `/usr/local/bin/lematt-notify.sh`          | Notification helper script           |
+| `/etc/lematt/notify.conf`                  | Notification configuration           |
 
 ### Generated Service Unit
 
@@ -929,12 +938,12 @@ lematt --test --health-check --warning-days 21 --critical-days 14
 
 ### Exit Codes
 
-| Code | Status | Meaning |
-|------|--------|---------|
-| 0 | Healthy | All certificates valid |
-| 1 | Warning | Certificates expiring soon |
-| 2 | Critical | Certificates expired or expiring very soon |
-| 3 | Unknown | Unable to check some certificates |
+| Code | Status   | Meaning                                    |
+| ---- | -------- | ------------------------------------------ |
+| 0    | Healthy  | All certificates valid                     |
+| 1    | Warning  | Certificates expiring soon                 |
+| 2    | Critical | Certificates expired or expiring very soon |
+| 3    | Unknown  | Unable to check some certificates          |
 
 ### JSON Health Output
 
@@ -992,12 +1001,14 @@ lematt_certificates_total{status="critical"} 0
 ### Monitoring Integration
 
 **Cron health check:**
+
 ```bash
 # /etc/cron.d/lematt-health
 */30 * * * * root lematt --prod --health-check --write-health /var/lib/lematt/health.json
 ```
 
 **Nagios/Icinga check:**
+
 ```bash
 #!/bin/bash
 # /usr/local/lib/nagios/plugins/check_lematt
@@ -1034,25 +1045,25 @@ lematt --test --dashboard --dashboard-compact
 
 ### Keyboard Controls
 
-| Key | Action |
-|-----|--------|
-| `q` | Quit dashboard |
-| `r` | Force refresh |
-| `p` | Pause/resume auto-refresh |
-| `c` | Toggle compact mode |
-| `1` | Switch to Overview view |
-| `2` | Switch to Certificates view |
+| Key | Action                        |
+| --- | ----------------------------- |
+| `q` | Quit dashboard                |
+| `r` | Force refresh                 |
+| `p` | Pause/resume auto-refresh     |
+| `c` | Toggle compact mode           |
+| `1` | Switch to Overview view       |
+| `2` | Switch to Certificates view   |
 | `3` | Switch to Health Details view |
-| `4` | Switch to Activity Log view |
+| `4` | Switch to Activity Log view   |
 
 ### Dashboard Views
 
-| View | Description |
-|------|-------------|
-| **Overview** | Health summary with overall status and quick stats |
-| **Certificates** | Detailed certificate table with expiry information |
+| View               | Description                                          |
+| ------------------ | ---------------------------------------------------- |
+| **Overview**       | Health summary with overall status and quick stats   |
+| **Certificates**   | Detailed certificate table with expiry information   |
 | **Health Details** | Extended health information with messages and issuer |
-| **Activity Log** | Recent dashboard activity and refresh timestamps |
+| **Activity Log**   | Recent dashboard activity and refresh timestamps     |
 
 ---
 
@@ -1088,20 +1099,20 @@ Reports include:
 
 ### Report Formats
 
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| `console` | (none) | Rich terminal display with tables and colors |
-| `json` | `.json` | Machine-readable JSON for automation |
-| `markdown` | `.md` | Human-readable Markdown for documentation |
+| Format     | Extension | Description                                  |
+| ---------- | --------- | -------------------------------------------- |
+| `console`  | (none)    | Rich terminal display with tables and colors |
+| `json`     | `.json`   | Machine-readable JSON for automation         |
+| `markdown` | `.md`     | Human-readable Markdown for documentation    |
 
 ### Renewal Schedule Priorities
 
-| Priority | Meaning |
-|----------|---------|
-| `immediate` | Overdue for renewal |
-| `soon` | Renewal due within 7 days |
+| Priority    | Meaning                    |
+| ----------- | -------------------------- |
+| `immediate` | Overdue for renewal        |
+| `soon`      | Renewal due within 7 days  |
 | `scheduled` | Renewal due within 14 days |
-| `ok` | No immediate action needed |
+| `ok`        | No immediate action needed |
 
 ---
 
@@ -1129,19 +1140,19 @@ lematt --test --help-search notification
 
 ### Available Help Topics
 
-| Topic | Category | Description |
-|-------|----------|-------------|
-| `run` | Commands | Execute certificate renewal |
-| `status` | Commands | Check certificate status |
-| `health` | Commands | Health check system |
-| `dashboard` | Commands | Interactive dashboard |
-| `config` | Commands | Configuration commands |
-| `configuration` | Configuration | Configuration file format |
-| `domains` | Configuration | Domain configuration |
-| `actions` | Actions | Deployment actions |
-| `systemd` | Systemd | Systemd integration |
-| `monitoring` | Monitoring | Monitoring integration |
-| `notifications` | Monitoring | Notification system |
+| Topic             | Category        | Description                 |
+| ----------------- | --------------- | --------------------------- |
+| `run`             | Commands        | Execute certificate renewal |
+| `status`          | Commands        | Check certificate status    |
+| `health`          | Commands        | Health check system         |
+| `dashboard`       | Commands        | Interactive dashboard       |
+| `config`          | Commands        | Configuration commands      |
+| `configuration`   | Configuration   | Configuration file format   |
+| `domains`         | Configuration   | Domain configuration        |
+| `actions`         | Actions         | Deployment actions          |
+| `systemd`         | Systemd         | Systemd integration         |
+| `monitoring`      | Monitoring      | Monitoring integration      |
+| `notifications`   | Monitoring      | Notification system         |
 | `troubleshooting` | Troubleshooting | Common issues and solutions |
 
 ### Help Categories
@@ -1199,14 +1210,14 @@ console.print(tree)
 
 ### Status Styles
 
-| Status | Color | Icon |
-|--------|-------|------|
-| Healthy/OK/Success | Green | ✓ |
-| Warning/Expiring | Yellow | ⚠ |
-| Critical/Error/Expired | Red | ✗ |
-| Unknown | Gray | ? |
-| Pending | Gray | ○ |
-| Running | White | ◉ |
+| Status                 | Color  | Icon |
+| ---------------------- | ------ | ---- |
+| Healthy/OK/Success     | Green  | ✓    |
+| Warning/Expiring       | Yellow | ⚠   |
+| Critical/Error/Expired | Red    | ✗    |
+| Unknown                | Gray   | ?    |
+| Pending                | Gray   | ○    |
+| Running                | White  | ◉    |
 
 ---
 
@@ -1217,6 +1228,7 @@ lematt supports multiple notification backends for alerting on certificate issue
 ### Configure Notifications
 
 **In TOML config:**
+
 ```toml
 [notifications]
 # Email (requires sendmail or SMTP)
@@ -1262,15 +1274,15 @@ lematt --test --test-notification
 
 ### Notification Backends
 
-| Backend | Configuration | Description |
-|---------|---------------|-------------|
-| **Email** | `email_to`, `email_from` | Uses sendmail or SMTP |
-| **Slack** | `webhook_url`, `webhook_format="slack"` | Slack incoming webhook |
-| **Discord** | `webhook_url`, `webhook_format="discord"` | Discord webhook |
-| **PagerDuty** | `pagerduty_key` | Only triggers on failures |
-| **Ntfy** | `ntfy_topic`, `ntfy_server` | Push notifications |
-| **Command** | `custom_command` | Run custom script |
-| **Journald** | `journald_enabled` | Systemd journal logging |
+| Backend       | Configuration                             | Description               |
+| ------------- | ----------------------------------------- | ------------------------- |
+| **Email**     | `email_to`, `email_from`                  | Uses sendmail or SMTP     |
+| **Slack**     | `webhook_url`, `webhook_format="slack"`   | Slack incoming webhook    |
+| **Discord**   | `webhook_url`, `webhook_format="discord"` | Discord webhook           |
+| **PagerDuty** | `pagerduty_key`                           | Only triggers on failures |
+| **Ntfy**      | `ntfy_topic`, `ntfy_server`               | Push notifications        |
+| **Command**   | `custom_command`                          | Run custom script         |
+| **Journald**  | `journald_enabled`                        | Systemd journal logging   |
 
 ### Shell Script Notifications
 
@@ -1287,28 +1299,34 @@ NOTIFY_CUSTOM_CMD="/usr/local/bin/my-script.sh"
 
 ### Notification Events
 
-| Event Type | Trigger | Default |
-|------------|---------|---------|
-| `failure` | Certificate renewal failed | Notify ✓ |
-| `warning` | Certificate expiring soon | Notify ✓ |
-| `success` | Renewal completed successfully | Silent |
-| `info` | Informational (test notifications) | Silent |
+| Event Type | Trigger                            | Default  |
+| ---------- | ---------------------------------- | -------- |
+| `failure`  | Certificate renewal failed         | Notify ✓ |
+| `warning`  | Certificate expiring soon          | Notify ✓ |
+| `success`  | Renewal completed successfully     | Silent   |
+| `info`     | Informational (test notifications) | Silent   |
 
 ### Slack Notification Example
 
 ```json
 {
-  "attachments": [{
-    "color": "danger",
-    "title": "Certificate Renewal Failed",
-    "text": "Failed to renew 2 certificates",
-    "fields": [
-      {"title": "Host", "value": "web-server-01", "short": true},
-      {"title": "Time", "value": "2024-05-01 12:00:00", "short": true},
-      {"title": "Domains", "value": "example.com, api.example.com", "short": true}
-    ],
-    "footer": "Lematt Certificate Manager"
-  }]
+  "attachments": [
+    {
+      "color": "danger",
+      "title": "Certificate Renewal Failed",
+      "text": "Failed to renew 2 certificates",
+      "fields": [
+        { "title": "Host", "value": "web-server-01", "short": true },
+        { "title": "Time", "value": "2024-05-01 12:00:00", "short": true },
+        {
+          "title": "Domains",
+          "value": "example.com, api.example.com",
+          "short": true
+        }
+      ],
+      "footer": "Lematt Certificate Manager"
+    }
+  ]
 }
 ```
 
@@ -1340,6 +1358,7 @@ curl -X POST "https://your-endpoint.com/webhook" \
 ### Common Issues
 
 **"Config file not found"**
+
 ```bash
 # Ensure config exists
 ls conf/lematt.conf conf/lematt.toml
@@ -1349,6 +1368,7 @@ lematt --test --config /path/to/lematt.conf
 ```
 
 **"Account key doesn't exist"**
+
 ```bash
 # Generate account key
 openssl genrsa 4096 > /etc/lematt/account.key
@@ -1356,12 +1376,14 @@ chmod 600 /etc/lematt/account.key
 ```
 
 **"Challenge directory does not exist"**
+
 ```bash
 mkdir -p /var/www/html/.well-known/acme-challenge
 # Ensure web server serves this path
 ```
 
 **"Rate limit exceeded"**
+
 - Use `--test` mode for development
 - Wait for rate limit window to reset (usually 1 week)
 - Consider using `--dry-run` to verify configuration
@@ -1369,6 +1391,7 @@ mkdir -p /var/www/html/.well-known/acme-challenge
 ### Logging
 
 Enable verbose output:
+
 ```bash
 lematt --test -v
 ```

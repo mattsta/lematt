@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-""" Maintain your LE infrastructure with config files and behaviors.
+"""Maintain your LE infrastructure with config files and behaviors.
 
 This was originally a shell script but got converted to python as
 more conditions and exceptions became necessary.
@@ -27,40 +27,42 @@ Brief (very brief) overview of acronyms and terms:
     - CRL: Certificate Revocation List - a way to check if certs are revoked
 """
 
-import multiprocessing
-import configparser
-import collections
-import subprocess
-import itertools
 import argparse
+import collections
+import configparser
 import datetime
-import tempfile
-import pathlib
+import itertools
+import json
 import logging
+import multiprocessing
+import os
+import pathlib
+import re
 import shlex
 import socket
-import json
-import time
 import ssl
+import subprocess
 import sys
-import re
-import os
-
-import acme_tiny  # distributed with lematt
-from datetime import timedelta  # make some lines shorter
-from typing import Dict, List, Tuple, Optional, Union, Any, Callable
+import tempfile
+import time
+from collections.abc import Callable
 from configparser import SectionProxy
 from dataclasses import dataclass, field
+from datetime import timedelta  # make some lines shorter
 from enum import Enum, auto
+from typing import Any, Optional
+
+import acme_tiny  # distributed with lematt
 
 # Try to import cryptography for native crypto operations
 # Falls back to openssl subprocess if not available
 try:
     from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa, ec
     from cryptography.hazmat.backends import default_backend
-    from cryptography.x509.oid import NameOID, ExtensionOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    from cryptography.x509.oid import ExtensionOID, NameOID
+
     HAS_CRYPTOGRAPHY = True
 except ImportError:
     HAS_CRYPTOGRAPHY = False
@@ -70,13 +72,15 @@ except ImportError:
 # Data Classes for Type-Safe Configuration and Results
 # ============================================================================
 
+
 class KeyType(Enum):
     """Enumeration of supported key types."""
+
     RSA = auto()
     EC = auto()
 
     @classmethod
-    def from_string(cls, s: str) -> "KeyType":
+    def from_string(cls, s: str) -> KeyType:
         """Convert string to KeyType enum."""
         mapping = {"rsa": cls.RSA, "ec": cls.EC}
         if s.lower() not in mapping:
@@ -90,22 +94,23 @@ class KeyType(Enum):
 @dataclass
 class CertificateInfo:
     """Information about a certificate's status and expiration."""
+
     exists: bool
     path: str
-    not_after: Optional[datetime.datetime] = None
-    not_before: Optional[datetime.datetime] = None
-    subject_cn: Optional[str] = None
-    san_domains: List[str] = field(default_factory=list)
-    issuer: Optional[str] = None
-    serial_number: Optional[str] = None
-    parse_error: Optional[str] = None
+    not_after: datetime.datetime | None = None
+    not_before: datetime.datetime | None = None
+    subject_cn: str | None = None
+    san_domains: list[str] = field(default_factory=list)
+    issuer: str | None = None
+    serial_number: str | None = None
+    parse_error: str | None = None
 
     @property
-    def days_until_expiry(self) -> Optional[int]:
+    def days_until_expiry(self) -> int | None:
         """Calculate days until certificate expires."""
         if not self.not_after:
             return None
-        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
         return (self.not_after - now).days
 
     @property
@@ -124,12 +129,13 @@ class CertificateInfo:
 @dataclass
 class DomainConfig:
     """Configuration for a domain or set of SAN domains."""
+
     primary_domain: str
-    san_domains: List[str] = field(default_factory=list)
+    san_domains: list[str] = field(default_factory=list)
     ocsp_staple_required: bool = False
 
     @property
-    def all_domains(self) -> List[str]:
+    def all_domains(self) -> list[str]:
         """Get all domains including primary and SANs."""
         return [self.primary_domain] + self.san_domains
 
@@ -154,27 +160,29 @@ class DomainConfig:
 @dataclass
 class ActionConfig:
     """Configuration for pre/post certificate actions."""
+
     name: str
-    prepare_commands: List[str] = field(default_factory=list)
-    upload_certs_commands: List[str] = field(default_factory=list)
-    upload_keys_commands: List[str] = field(default_factory=list)
-    update_commands: List[str] = field(default_factory=list)
+    prepare_commands: list[str] = field(default_factory=list)
+    upload_certs_commands: list[str] = field(default_factory=list)
+    upload_keys_commands: list[str] = field(default_factory=list)
+    update_commands: list[str] = field(default_factory=list)
     ocsp_staple_required: bool = False
-    domains: List[str] = field(default_factory=list)
+    domains: list[str] = field(default_factory=list)
 
     def has_actions(self) -> bool:
         """Check if any actions are configured."""
         return bool(
-            self.prepare_commands or
-            self.upload_certs_commands or
-            self.upload_keys_commands or
-            self.update_commands
+            self.prepare_commands
+            or self.upload_certs_commands
+            or self.upload_keys_commands
+            or self.update_commands
         )
 
 
 @dataclass
 class LemattConfig:
     """Global configuration for lematt."""
+
     # Paths
     config_base: str
     challenge_dir: str
@@ -219,7 +227,9 @@ class LemattConfig:
     def reauthorize_timedelta(self) -> timedelta:
         """Get the reauthorization window as a timedelta."""
         if self.generate_new_certs_after_days > 0:
-            return timedelta(days=90) - timedelta(days=self.generate_new_certs_after_days)
+            return timedelta(days=90) - timedelta(
+                days=self.generate_new_certs_after_days
+            )
         return timedelta(days=self.reauthorize_days)
 
     def get_subdir(self, subdir: str) -> str:
@@ -249,13 +259,14 @@ class LemattConfig:
 @dataclass
 class CertificateResult:
     """Result of a certificate generation/renewal operation."""
+
     domain_config: DomainConfig
     key_type: KeyType
     success: bool
     renewed: bool = False
-    cert_path: Optional[str] = None
-    key_path: Optional[str] = None
-    error_message: Optional[str] = None
+    cert_path: str | None = None
+    key_path: str | None = None
+    error_message: str | None = None
 
     @property
     def domain(self) -> str:
@@ -265,11 +276,12 @@ class CertificateResult:
 @dataclass
 class RenewalSummary:
     """Summary of all certificate renewal operations."""
+
     total_domains: int = 0
     renewed_count: int = 0
     failed_count: int = 0
     skipped_count: int = 0
-    results: List[CertificateResult] = field(default_factory=list)
+    results: list[CertificateResult] = field(default_factory=list)
 
     def add_result(self, result: CertificateResult) -> None:
         """Add a result to the summary."""
@@ -292,20 +304,19 @@ class RenewalSummary:
 # Cryptography Library Functions (optional, falls back to openssl)
 # ============================================================================
 
+
 def generate_rsa_key_native(bits: int = 2048) -> bytes:
     """Generate RSA private key using cryptography library."""
     if not HAS_CRYPTOGRAPHY:
         raise ImportError("cryptography library not available")
 
     private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=bits,
-        backend=default_backend()
+        public_exponent=65537, key_size=bits, backend=default_backend()
     )
     return private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption()
+        encryption_algorithm=serialization.NoEncryption(),
     )
 
 
@@ -326,13 +337,12 @@ def generate_ec_key_native(curve_name: str = "prime256v1") -> bytes:
         raise ValueError(f"Unsupported curve: {curve_name}")
 
     private_key = ec.generate_private_key(
-        curve_map[curve_name],
-        backend=default_backend()
+        curve_map[curve_name], backend=default_backend()
     )
     return private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption()
+        encryption_algorithm=serialization.NoEncryption(),
     )
 
 
@@ -359,8 +369,12 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
         # Extract SAN domains
         san_domains = []
         try:
-            san_ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
-            san_domains = [name.value for name in san_ext.value if isinstance(name, x509.DNSName)]
+            san_ext = cert.extensions.get_extension_for_oid(
+                ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+            )
+            san_domains = [
+                name.value for name in san_ext.value if isinstance(name, x509.DNSName)
+            ]
         except x509.ExtensionNotFound:
             pass
 
@@ -373,25 +387,23 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
         return CertificateInfo(
             exists=True,
             path=cert_path,
-            not_after=cert.not_valid_after_utc.replace(tzinfo=None) if hasattr(cert, 'not_valid_after_utc') else cert.not_valid_after.replace(tzinfo=None),
-            not_before=cert.not_valid_before_utc.replace(tzinfo=None) if hasattr(cert, 'not_valid_before_utc') else cert.not_valid_before.replace(tzinfo=None),
+            not_after=cert.not_valid_after_utc.replace(tzinfo=None)
+            if hasattr(cert, "not_valid_after_utc")
+            else cert.not_valid_after.replace(tzinfo=None),
+            not_before=cert.not_valid_before_utc.replace(tzinfo=None)
+            if hasattr(cert, "not_valid_before_utc")
+            else cert.not_valid_before.replace(tzinfo=None),
             subject_cn=cn,
             san_domains=san_domains,
             issuer=issuer,
             serial_number=str(cert.serial_number),
         )
     except Exception as e:
-        return CertificateInfo(
-            exists=True,
-            path=cert_path,
-            parse_error=str(e)
-        )
+        return CertificateInfo(exists=True, path=cert_path, parse_error=str(e))
 
 
 def generate_csr_native(
-    private_key_path: str,
-    domains: List[str],
-    ocsp_must_staple: bool = False
+    private_key_path: str, domains: list[str], ocsp_must_staple: bool = False
 ) -> bytes:
     """Generate CSR using cryptography library."""
     if not HAS_CRYPTOGRAPHY:
@@ -400,17 +412,19 @@ def generate_csr_native(
     # Load private key
     with open(private_key_path, "rb") as f:
         private_key = serialization.load_pem_private_key(
-            f.read(),
-            password=None,
-            backend=default_backend()
+            f.read(), password=None, backend=default_backend()
         )
 
     # Build CSR
     primary_domain = domains[0]
     builder = x509.CertificateSigningRequestBuilder()
-    builder = builder.subject_name(x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, primary_domain),
-    ]))
+    builder = builder.subject_name(
+        x509.Name(
+            [
+                x509.NameAttribute(NameOID.COMMON_NAME, primary_domain),
+            ]
+        )
+    )
 
     # Add SAN extension if multiple domains
     if len(domains) > 1 or True:  # Always add SAN for consistency
@@ -436,8 +450,13 @@ def generate_csr_native(
 # Unified Crypto Functions (native with openssl fallback)
 # ============================================================================
 
-def generate_private_key(key_type: KeyType, config: Optional["LemattConfig"] = None,
-                         rsa_bits: int = 2048, ec_curve: str = "prime256v1") -> bytes:
+
+def generate_private_key(
+    key_type: KeyType,
+    config: LemattConfig | None = None,
+    rsa_bits: int = 2048,
+    ec_curve: str = "prime256v1",
+) -> bytes:
     """Generate a private key, using native crypto if available."""
     if HAS_CRYPTOGRAPHY:
         if key_type == KeyType.RSA:
@@ -448,15 +467,13 @@ def generate_private_key(key_type: KeyType, config: Optional["LemattConfig"] = N
         # Fall back to openssl subprocess
         if key_type == KeyType.RSA:
             result = subprocess.run(
-                ["openssl", "genrsa", str(rsa_bits)],
-                capture_output=True,
-                check=True
+                ["openssl", "genrsa", str(rsa_bits)], capture_output=True, check=True
             )
         else:
             result = subprocess.run(
                 ["openssl", "ecparam", "-genkey", "-name", ec_curve],
                 capture_output=True,
-                check=True
+                check=True,
             )
         return result.stdout
 
@@ -473,10 +490,20 @@ def get_certificate_info(cert_path: str) -> CertificateInfo:
     try:
         # Get expiration date
         result = subprocess.run(
-            ["openssl", "x509", "-in", cert_path, "-noout", "-enddate", "-startdate", "-subject", "-issuer"],
+            [
+                "openssl",
+                "x509",
+                "-in",
+                cert_path,
+                "-noout",
+                "-enddate",
+                "-startdate",
+                "-subject",
+                "-issuer",
+            ],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
 
         info = CertificateInfo(exists=True, path=cert_path)
@@ -490,18 +517,22 @@ def get_certificate_info(cert_path: str) -> CertificateInfo:
                     pass
             elif line.startswith("notBefore="):
                 try:
-                    info.not_before = datetime.datetime.strptime(line[10:], ssl_date_fmt)
+                    info.not_before = datetime.datetime.strptime(
+                        line[10:], ssl_date_fmt
+                    )
                 except ValueError:
                     pass
             elif line.startswith("subject="):
                 # Extract CN from subject
                 import re
-                cn_match = re.search(r'CN\s*=\s*([^,/]+)', line)
+
+                cn_match = re.search(r"CN\s*=\s*([^,/]+)", line)
                 if cn_match:
                     info.subject_cn = cn_match.group(1).strip()
             elif line.startswith("issuer="):
                 import re
-                cn_match = re.search(r'CN\s*=\s*([^,/]+)', line)
+
+                cn_match = re.search(r"CN\s*=\s*([^,/]+)", line)
                 if cn_match:
                     info.issuer = cn_match.group(1).strip()
 
@@ -511,10 +542,13 @@ def get_certificate_info(cert_path: str) -> CertificateInfo:
                 ["openssl", "x509", "-in", cert_path, "-noout", "-text"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
             import re
-            san_match = re.search(r'X509v3 Subject Alternative Name:\s*\n\s*([^\n]+)', san_result.stdout)
+
+            san_match = re.search(
+                r"X509v3 Subject Alternative Name:\s*\n\s*([^\n]+)", san_result.stdout
+            )
             if san_match:
                 san_line = san_match.group(1)
                 info.san_domains = [
@@ -528,15 +562,15 @@ def get_certificate_info(cert_path: str) -> CertificateInfo:
         return info
 
     except (subprocess.CalledProcessError, OSError) as e:
-        return CertificateInfo(
-            exists=True,
-            path=cert_path,
-            parse_error=str(e)
-        )
+        return CertificateInfo(exists=True, path=cert_path, parse_error=str(e))
 
 
-def create_csr(private_key_path: str, domains: List[str], output_path: str,
-               ocsp_must_staple: bool = False) -> bool:
+def create_csr(
+    private_key_path: str,
+    domains: list[str],
+    output_path: str,
+    ocsp_must_staple: bool = False,
+) -> bool:
     """Create a CSR, using native crypto if available."""
     if HAS_CRYPTOGRAPHY:
         try:
@@ -545,7 +579,9 @@ def create_csr(private_key_path: str, domains: List[str], output_path: str,
                 f.write(csr_bytes)
             return True
         except Exception as e:
-            logger.warning(f"Native CSR generation failed, falling back to openssl: {e}")
+            logger.warning(
+                f"Native CSR generation failed, falling back to openssl: {e}"
+            )
 
     # Fall back to openssl subprocess
     primary_domain = domains[0]
@@ -578,10 +614,7 @@ subjectAltName={san_config}"""
     try:
         cmd = f"openssl req -new -sha256 -key {private_key_path} -subj /CN={primary_domain} {cmd_san} -config -"
         result = subprocess.run(
-            cmd.split(),
-            input=stdin_config.encode(),
-            capture_output=True,
-            check=True
+            cmd.split(), input=stdin_config.encode(), capture_output=True, check=True
         )
         with open(output_path, "wb") as f:
             f.write(result.stdout)
@@ -613,11 +646,12 @@ def setup_logging(is_cron: bool = False, verbose: bool = False) -> None:
     # Create formatter
     if is_cron:
         # Simpler format for cron (typically captured in logs)
-        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s',
-                                       datefmt='%Y-%m-%d %H:%M:%S')
+        formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
     else:
         # More detailed format for interactive use
-        formatter = logging.Formatter('%(message)s')
+        formatter = logging.Formatter("%(message)s")
 
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
@@ -679,7 +713,7 @@ def getSubdir(subdir: str) -> str:
     return base + subdir
 
 
-def loadDomainActions() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+def loadDomainActions() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Read actions.conf and parse actions into usable dicts."""
     domainActions = {}
     domainActionNames = {}
@@ -748,11 +782,13 @@ def loadDomainActions() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, 
 
 def gendir(subname: str) -> None:
     """Create a directory hierarchy but don't complain if already exists."""
-    adir = pathlib.Path("{}/{}".format(configBase, subname))
+    adir = pathlib.Path(f"{configBase}/{subname}")
     adir.mkdir(parents=True, exist_ok=True)
 
 
-def run(thing: str, shell: bool = False, output: bool = True, stdinSend: Optional[str] = None) -> subprocess.CompletedProcess:
+def run(
+    thing: str, shell: bool = False, output: bool = True, stdinSend: str | None = None
+) -> subprocess.CompletedProcess:
     """Run any string as a command (maybe as shell for env/expansion too)."""
     log(f"Running: {thing}", "CMD", update=True)
     if stdinSend:
@@ -778,8 +814,7 @@ def run(thing: str, shell: bool = False, output: bool = True, stdinSend: Optiona
         #       but text=True is only Python 3.7 and as of right now we
         #       work fine in Python 3.6. Seems adding one line invaliding
         #       our entire current Python version is a bit extreme.
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
 
@@ -802,7 +837,9 @@ def runAndWrite(thing, writeTo, perm=0o644, shell=False, stdinSend=None):
         w.write(ran.stdout.decode("utf-8"))
 
 
-def customizeName(subdir: str, name: str, subtype: str, enctype: str, ext: str = "pem") -> str:
+def customizeName(
+    subdir: str, name: str, subtype: str, enctype: str, ext: str = "pem"
+) -> str:
     """Generate a customized filename for keys, certs, or CSRs."""
     if enctype not in ("rsa", "ec"):
         raise ValueError(f"Invalid enctype: '{enctype}' - must be 'rsa' or 'ec'")
@@ -919,7 +956,7 @@ def certFromNetwork(hostname):
     return ssl_info
 
 
-def certFromFile(certPath: str) -> Union[bool, Dict[str, str]]:
+def certFromFile(certPath: str) -> bool | dict[str, str]:
     """Get cert expiration from local file."""
     # If cert doesn't exist, it must be requested...
     certExists = os.path.isfile(certPath)
@@ -933,7 +970,7 @@ def certFromFile(certPath: str) -> Union[bool, Dict[str, str]]:
             ["openssl", "x509", "-in", certPath, "-noout", "-enddate"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
         # Output format: "notAfter=Mar 15 12:00:00 2024 GMT"
         enddate_line = result.stdout.strip()
@@ -948,7 +985,9 @@ def certFromFile(certPath: str) -> Union[bool, Dict[str, str]]:
     return True
 
 
-def certNeedsRenewal(certDetails: Union[bool, Dict[str, str]], utcnow: datetime.datetime) -> bool:
+def certNeedsRenewal(
+    certDetails: bool | dict[str, str], utcnow: datetime.datetime
+) -> bool:
     """Check if a certificate needs renewal based on expiration date."""
     # The first check guards against True from 'certFromFile()'.
     # (if cert doesn't exist, we obviously need to request one)
@@ -980,10 +1019,13 @@ def certNeedsRenewal(certDetails: Union[bool, Dict[str, str]], utcnow: datetime.
 
 class CertificateRequestError(Exception):
     """Raised when certificate request fails after all retries."""
+
     pass
 
 
-def requestCert(csr: str, outCert: str, isTest: bool = False, max_retries: int = 3) -> bool:
+def requestCert(
+    csr: str, outCert: str, isTest: bool = False, max_retries: int = 3
+) -> bool:
     if isTest:
         directory = STAGING
     else:
@@ -1008,13 +1050,20 @@ def requestCert(csr: str, outCert: str, isTest: bool = False, max_retries: int =
             return True
         except Exception as e:
             last_error = e
-            wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
+            wait_time = 2**attempt  # Exponential backoff: 1, 2, 4 seconds
             if attempt < max_retries - 1:
-                log(f"Certificate request failed (attempt {attempt + 1}/{max_retries}): {e}", "RETRY")
+                log(
+                    f"Certificate request failed (attempt {attempt + 1}/{max_retries}): {e}",
+                    "RETRY",
+                )
                 log(f"Retrying in {wait_time} seconds...", "RETRY")
                 time.sleep(wait_time)
             else:
-                log(f"Certificate request failed after {max_retries} attempts: {e}", "ERROR", update=True)
+                log(
+                    f"Certificate request failed after {max_retries} attempts: {e}",
+                    "ERROR",
+                    update=True,
+                )
 
     # All retries exhausted
     log(f"FAILED FOR CSR: {csr}", "ERROR", update=True)
@@ -1079,7 +1128,7 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
 
     # Use timestamp for detecting expired certs or certs needing renewal soon
     # Note: Using timezone-aware UTC time (datetime.utcnow() is deprecated in Python 3.12+)
-    utcnow = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    utcnow = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
 
     def updateDomainForKeyType(domain, keyType):
         # If this is a SAN request, combine all domains for filenames
@@ -1100,7 +1149,9 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
             domains = []
 
         if "." not in domain:
-            raise ValueError(f"Invalid domain name: '{domain}' - must contain at least one period")
+            raise ValueError(
+                f"Invalid domain name: '{domain}' - must contain at least one period"
+            )
         privateKey = customizeName("key", domain, "key", keyType)
         cert = customizeName("cert", domain, "cert-combined", keyType)
         csr = customizeName("csr", domain, "csr", keyType, "csr")
@@ -1112,15 +1163,13 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
                 if isEC:
                     log(f"Generating EC {CURVE} key...", keyType)
                     runAndWrite(
-                        "openssl ecparam -genkey -name {}".format(CURVE),
+                        f"openssl ecparam -genkey -name {CURVE}",
                         privateKey,
                         0o600,
                     )
                 else:
                     log(f"Generating RSA {KEYBITS_RSA} key...", keyType)
-                    runAndWrite(
-                        "openssl genrsa {}".format(KEYBITS_RSA), privateKey, 0o600
-                    )
+                    runAndWrite(f"openssl genrsa {KEYBITS_RSA}", privateKey, 0o600)
 
             # also link the combined key into symlinks for each domain
             # the key represents for easier configuration management...
@@ -1140,7 +1189,10 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
                     os.symlink(keyNameOnly, temp_link)
                     os.replace(temp_link, singleDomainKey)  # Atomic replacement
                 except OSError as e:
-                    log(f"Warning: Could not create symlink {singleDomainKey}: {e}", "WARN")
+                    log(
+                        f"Warning: Could not create symlink {singleDomainKey}: {e}",
+                        "WARN",
+                    )
                     try:
                         os.unlink(temp_link)
                     except OSError:
@@ -1175,7 +1227,9 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
             log(f"[DRY-RUN] Would request certificate: {cert}", keyType, update=True)
             if domains:
                 for d in domains:
-                    log(f"[DRY-RUN] Would create symlink for: {d}", keyType, update=True)
+                    log(
+                        f"[DRY-RUN] Would create symlink for: {d}", keyType, update=True
+                    )
             return updatedCerts
 
         generateKey()
@@ -1192,7 +1246,11 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
         unprepareDomainForUpdate(prepared)
 
         if not cert_success:
-            log(f"Skipping symlinks and updates for {domain} due to cert failure", keyType, update=True)
+            log(
+                f"Skipping symlinks and updates for {domain} due to cert failure",
+                keyType,
+                update=True,
+            )
             return updatedCerts
 
         # Also create individually named symlinks for each domain pointing
@@ -1213,7 +1271,9 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
                 os.symlink(certNameOnly, temp_link)
                 os.replace(temp_link, singleDomainCert)  # Atomic replacement
             except OSError as e:
-                log(f"Warning: Could not create symlink {singleDomainCert}: {e}", "WARN")
+                log(
+                    f"Warning: Could not create symlink {singleDomainCert}: {e}", "WARN"
+                )
                 try:
                     os.unlink(temp_link)
                 except OSError:
@@ -1264,7 +1324,6 @@ def sortByDomain(x):
 # action maps have element 'actionName' to map domainActions->domainNameActions
 # for deduplicating final cert/key copying and update actions.
 def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts):
-
     # No updated certs? No need to update anything!
     if not updatedCerts:
         return
@@ -1304,7 +1363,9 @@ def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts
         replaceDomainsCN = " ".join(shlex.quote(d) for d in firstDomains)
 
         # Flatten the 'updatedDomains' list of lists so we can just join it all
-        replaceDomainsALL = " ".join(shlex.quote(d) for d in set(itertools.chain(*updatedDomains)))
+        replaceDomainsALL = " ".join(
+            shlex.quote(d) for d in set(itertools.chain(*updatedDomains))
+        )
 
         # This loop basically flattens nested updatedDomains and annotates
         # which ones are SAN domains versus the root CN itself
@@ -1326,7 +1387,7 @@ def updateKeysAndCertsAndServices(domainActions, domainActionNames, updatedCerts
 
         updatedFormatted = ", ".join(totalDomainsSANDescribed)
         log(
-            "Executing " f"[{actions['actionName']}] for {updatedFormatted}",
+            f"Executing [{actions['actionName']}] for {updatedFormatted}",
             "action",
             update=True,
         )
@@ -1415,7 +1476,9 @@ def showCertificateStatus(configuredDomains, configBase):
     if HAS_CRYPTOGRAPHY:
         print("(Using native cryptography library)")
     else:
-        print("(Using openssl subprocess - install 'cryptography' for better performance)")
+        print(
+            "(Using openssl subprocess - install 'cryptography' for better performance)"
+        )
     print("=" * 80)
     print(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
     print("-" * 80)
@@ -1425,7 +1488,7 @@ def showCertificateStatus(configuredDomains, configBase):
         if isinstance(configuredDomain, list):
             domain_display = configuredDomain[0]
             if len(configuredDomain) > 1:
-                domain_display += f" (+{len(configuredDomain)-1} SANs)"
+                domain_display += f" (+{len(configuredDomain) - 1} SANs)"
             domain_for_file = "_".join(configuredDomain)
         else:
             domain_display = configuredDomain
@@ -1496,27 +1559,39 @@ def validateConfig(config: SectionProxy, configBase: str) -> bool:
         try:
             key_bits = int(config["keyBitsRSA"])
             if key_bits < 2048:
-                warnings.append(f"RSA key size {key_bits} is insecure. Use at least 2048 bits.")
+                warnings.append(
+                    f"RSA key size {key_bits} is insecure. Use at least 2048 bits."
+                )
             elif key_bits > 4096:
-                warnings.append(f"RSA key size {key_bits} may cause performance issues. 2048-4096 recommended.")
+                warnings.append(
+                    f"RSA key size {key_bits} may cause performance issues. 2048-4096 recommended."
+                )
         except ValueError:
-            errors.append(f"Invalid keyBitsRSA value: {config['keyBitsRSA']} (must be integer)")
+            errors.append(
+                f"Invalid keyBitsRSA value: {config['keyBitsRSA']} (must be integer)"
+            )
 
     # Validate curve
     valid_curves = ["prime256v1", "secp256r1", "secp384r1", "secp521r1"]
     if "curve" in config:
         curve = config["curve"]
         if curve not in valid_curves:
-            warnings.append(f"EC curve '{curve}' may not be widely supported. Recommended: {valid_curves}")
+            warnings.append(
+                f"EC curve '{curve}' may not be widely supported. Recommended: {valid_curves}"
+            )
 
     # Validate reauthorizeDays
     if "reauthorizeDays" in config:
         try:
             days = float(config["reauthorizeDays"])
             if days < 1:
-                warnings.append(f"reauthorizeDays={days} is very aggressive. Consider higher value.")
+                warnings.append(
+                    f"reauthorizeDays={days} is very aggressive. Consider higher value."
+                )
             elif days > 89:
-                warnings.append(f"reauthorizeDays={days} exceeds LE cert lifetime (90 days).")
+                warnings.append(
+                    f"reauthorizeDays={days} exceeds LE cert lifetime (90 days)."
+                )
         except ValueError:
             errors.append(f"Invalid reauthorizeDays value: {config['reauthorizeDays']}")
 
@@ -1525,9 +1600,13 @@ def validateConfig(config: SectionProxy, configBase: str) -> bool:
         try:
             days = float(config["generateNewCertsAfterDays"])
             if days > 0 and days < 3.5:
-                warnings.append(f"generateNewCertsAfterDays={days} may hit rate limits. Minimum 3.5 days recommended.")
+                warnings.append(
+                    f"generateNewCertsAfterDays={days} may hit rate limits. Minimum 3.5 days recommended."
+                )
         except ValueError:
-            errors.append(f"Invalid generateNewCertsAfterDays value: {config['generateNewCertsAfterDays']}")
+            errors.append(
+                f"Invalid generateNewCertsAfterDays value: {config['generateNewCertsAfterDays']}"
+            )
 
     # Check domains file exists
     domains_file = f"{configBase}/domains"
@@ -1553,7 +1632,7 @@ def validateConfig(config: SectionProxy, configBase: str) -> bool:
     return True
 
 
-def loadDomains() -> List[Union[str, List[str]]]:
+def loadDomains() -> list[str | list[str]]:
     """Load domain configuration from the domains file."""
     # Format of 'domains' file is one or more domains per line.
     # Each line becomes ONE certificate. If more than one domain
@@ -1563,7 +1642,7 @@ def loadDomains() -> List[Union[str, List[str]]]:
     # e.g. "mydomain.com www" will generate a certificate with
     # domains: mydomain.com and www.mydomain.com
     configuredDomains = []
-    with open(f"{configBase}/domains", "r") as doms:
+    with open(f"{configBase}/domains") as doms:
         for line in doms:
             # Skip commented out or blank lines
             if line.startswith("#") or line.startswith("\n"):
@@ -1653,7 +1732,8 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         dest="verbose",
         action="store_true",
         help="Enable verbose output (show all debug messages)",
@@ -1768,7 +1848,7 @@ if __name__ == "__main__":
 
     # TODO: turn this into a map of CHAIN = {'rsa': CHAIN_RSA, 'ec': CHAIN_EC}
     # LE plans a full ECDSA cert chain in Q3 2018
-    CHAIN_RSA = "{}/{}".format(configBase, CROSSCHAIN_NAME_RSA).replace(".txt", "")
+    CHAIN_RSA = f"{configBase}/{CROSSCHAIN_NAME_RSA}".replace(".txt", "")
 
     # LE actually returns a chained cert, so we don't have to manually apply
     # the cross chain ourself, but the cross chain is useful for configuring
@@ -1816,7 +1896,7 @@ if __name__ == "__main__":
     # Fetch intermediate cert so user can copy it elsewhere if needed
     if not os.path.isfile(CHAIN_RSA):
         run(
-            "wget -O{} {}{}".format(CHAIN_RSA, CROSSCHAIN_BASE, CROSSCHAIN_NAME_RSA),
+            f"wget -O{CHAIN_RSA} {CROSSCHAIN_BASE}{CROSSCHAIN_NAME_RSA}",
             output=False,
         )
 

@@ -23,6 +23,7 @@ from lematt.manager import CertificateManager
 HAS_RICH = True
 try:
     from rich.console import Console
+
     console = Console()
 except ImportError:
     HAS_RICH = False
@@ -133,20 +134,26 @@ def validate_config(
         try:
             key_bits = int(config["keyBitsRSA"])
             if key_bits < 2048:
-                warnings.append(f"RSA key size {key_bits} is insecure. Use at least 2048 bits.")
+                warnings.append(
+                    f"RSA key size {key_bits} is insecure. Use at least 2048 bits."
+                )
             elif key_bits > 4096:
                 warnings.append(
                     f"RSA key size {key_bits} may cause performance issues. 2048-4096 recommended."
                 )
         except ValueError:
-            errors.append(f"Invalid keyBitsRSA value: {config['keyBitsRSA']} (must be integer)")
+            errors.append(
+                f"Invalid keyBitsRSA value: {config['keyBitsRSA']} (must be integer)"
+            )
 
     # Validate curve
     valid_curves = ["prime256v1", "secp256r1", "secp384r1", "secp521r1"]
     if "curve" in config:
         curve = config["curve"]
         if curve not in valid_curves:
-            warnings.append(f"EC curve '{curve}' may not be widely supported: {valid_curves}")
+            warnings.append(
+                f"EC curve '{curve}' may not be widely supported: {valid_curves}"
+            )
 
     # Validate reauthorizeDays
     if "reauthorizeDays" in config:
@@ -155,7 +162,9 @@ def validate_config(
             if days < 1:
                 warnings.append(f"reauthorizeDays={days} is very aggressive.")
             elif days > 89:
-                warnings.append(f"reauthorizeDays={days} exceeds LE cert lifetime (90 days).")
+                warnings.append(
+                    f"reauthorizeDays={days} exceeds LE cert lifetime (90 days)."
+                )
         except ValueError:
             errors.append(f"Invalid reauthorizeDays value: {config['reauthorizeDays']}")
 
@@ -444,18 +453,24 @@ def main() -> int:
     # Handle --help-topic: show contextual help
     if args.help_topic is not None:
         if not HAS_RICH:
-            logger.error("Rich library required for help display. Install with: pip install rich")
+            logger.error(
+                "Rich library required for help display. Install with: pip install rich"
+            )
             return 1
         from lematt.help import print_help
+
         print_help(args.help_topic if args.help_topic else None)
         return 0
 
     # Handle --help-search: search help topics
     if args.help_search:
         if not HAS_RICH:
-            logger.error("Rich library required for help display. Install with: pip install rich")
+            logger.error(
+                "Rich library required for help display. Install with: pip install rich"
+            )
             return 1
         from lematt.help import search_help
+
         search_help(args.help_search)
         return 0
 
@@ -590,12 +605,14 @@ def main() -> int:
         if args.json_output:
             domain_list = []
             for d in domains:
-                domain_list.append({
-                    "primary": d.primary_domain,
-                    "sans": d.san_domains,
-                    "all_domains": d.all_domains,
-                    "ocsp_staple_required": d.ocsp_staple_required,
-                })
+                domain_list.append(
+                    {
+                        "primary": d.primary_domain,
+                        "sans": d.san_domains,
+                        "all_domains": d.all_domains,
+                        "ocsp_staple_required": d.ocsp_staple_required,
+                    }
+                )
             print(json.dumps(domain_list, indent=2))  # JSON data output to stdout
         else:
             logger.info(f"Configured domains ({len(domains)} certificates):")
@@ -648,7 +665,9 @@ def main() -> int:
         if args.check_live:
             logger.info("Checking live certificates...")
             for domain_config in domains:
-                live_health = checker.check_live_certificate(domain_config.primary_domain)
+                live_health = checker.check_live_certificate(
+                    domain_config.primary_domain
+                )
                 health.certificates.append(live_health)
                 if live_health.status in (HealthStatus.CRITICAL, HealthStatus.WARNING):
                     if live_health.status == HealthStatus.CRITICAL:
@@ -669,7 +688,9 @@ def main() -> int:
                 HealthStatus.CRITICAL: "✗",
                 HealthStatus.UNKNOWN: "?",
             }
-            logger.info(f"Health Check: {status_icon.get(health.status, '?')} {health.status}")
+            logger.info(
+                f"Health Check: {status_icon.get(health.status, '?')} {health.status}"
+            )
             logger.info(health.summary)
             logger.info("-" * 60)
             for cert in health.certificates:
@@ -693,7 +714,9 @@ def main() -> int:
     # Handle --dashboard: launch interactive dashboard
     if args.dashboard:
         if not HAS_RICH:
-            logger.error("Rich library required for dashboard. Install with: pip install rich")
+            logger.error(
+                "Rich library required for dashboard. Install with: pip install rich"
+            )
             return 1
 
         from lematt.dashboard import Dashboard, DashboardConfig
@@ -743,7 +766,9 @@ def main() -> int:
     # Handle --report: generate certificate report
     if args.report:
         if not HAS_RICH:
-            logger.error("Rich library required for reports. Install with: pip install rich")
+            logger.error(
+                "Rich library required for reports. Install with: pip install rich"
+            )
             return 1
 
         from lematt.health import HealthChecker
@@ -836,7 +861,9 @@ def main() -> int:
 
         if not manager.backends:
             logger.error("No notification backends configured")
-            logger.error("Configure notifications in lematt.toml [notifications] section")
+            logger.error(
+                "Configure notifications in lematt.toml [notifications] section"
+            )
             return 1
 
         logger.info(f"Testing {len(manager.backends)} notification backend(s)...")
@@ -897,7 +924,8 @@ def main() -> int:
         filtered = [
             d
             for d in configured_domains
-            if args.single_domain in d.all_domains or d.primary_domain == args.single_domain
+            if args.single_domain in d.all_domains
+            or d.primary_domain == args.single_domain
         ]
         if not filtered:
             logger.error(f"Domain '{args.single_domain}' not found in configuration")
@@ -910,14 +938,18 @@ def main() -> int:
 
     # Show status and exit if requested
     if args.show_status:
-        status_data = manager.show_status(configured_domains, json_output=args.json_output)
+        status_data = manager.show_status(
+            configured_domains, json_output=args.json_output
+        )
         if args.json_output and status_data:
             print(json.dumps(status_data, indent=2))  # JSON data output to stdout
         return 0
 
     # Display welcome message
     if not args.is_cron:
-        prefix = "[TEST MODE — DO NOT USE TEST CERTS IN PRODUCTION] " if args.is_test else ""
+        prefix = (
+            "[TEST MODE — DO NOT USE TEST CERTS IN PRODUCTION] " if args.is_test else ""
+        )
         logger.info(f"{prefix}Welcome to LE Matt!")
         if args.dry_run:
             logger.info("[DRY-RUN MODE - No changes will be made]")
@@ -939,7 +971,9 @@ def main() -> int:
     action_runner.load_actions()
 
     # Process certificates using the robust executor
-    progress_callback = create_progress_printer(verbose=args.verbose) if not args.is_cron else None
+    progress_callback = (
+        create_progress_printer(verbose=args.verbose) if not args.is_cron else None
+    )
 
     executor = CertificateExecutor(
         config=lematt_config,

@@ -100,8 +100,12 @@ class ConfigLoader:
                 "challenge_dir": config.get("challengeDropDir", ""),
                 "account_key": config.get("accountKey", ""),
                 "reauthorize_days": float(config.get("reauthorizeDays", "15")),
-                "generate_new_certs_after_days": float(config.get("generateNewCertsAfterDays", "0")),
-                "always_generate_new_keys": config.getboolean("alwaysGenerateNewKeys", fallback=False),
+                "generate_new_certs_after_days": float(
+                    config.get("generateNewCertsAfterDays", "0")
+                ),
+                "always_generate_new_keys": config.getboolean(
+                    "alwaysGenerateNewKeys", fallback=False
+                ),
                 "key_bits_rsa": int(config.get("keyBitsRSA", "2048")),
                 "ec_curve": config.get("curve", "prime256v1"),
                 "rsa_tag": config.get("rsaTag", ""),
@@ -141,7 +145,9 @@ class ConfigLoader:
             challenge_dir=config.get("challenge_dir", ""),
             account_key=config.get("account_key", ""),
             reauthorize_days=config.get("reauthorize_days", 15.0),
-            generate_new_certs_after_days=config.get("generate_new_certs_after_days", 0.0),
+            generate_new_certs_after_days=config.get(
+                "generate_new_certs_after_days", 0.0
+            ),
             always_generate_new_keys=config.get("always_generate_new_keys", False),
             rsa_key_bits=rsa_bits,
             ec_curve=ec_curve,
@@ -338,7 +344,7 @@ def create_example_toml(path: Path) -> None:
     Args:
         path: Path to write the example config.
     """
-    example = '''# lematt TOML configuration
+    example = """# lematt TOML configuration
 # This is the modern configuration format for lematt.
 
 [config]
@@ -444,6 +450,6 @@ notify_on_success = false
 
 # Run missed timers on boot
 # persistent = true
-'''
+"""
     path.write_text(example)
     logger.info(f"Created example TOML config at {path}")
