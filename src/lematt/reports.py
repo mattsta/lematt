@@ -9,17 +9,16 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TextIO
 
-from rich.console import Console, Group
+from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from .config import DomainConfig, LemattConfig
+from .config import LemattConfig
 from .display import DisplayConfig, StatusStyle, console
-from .health import CertificateHealth, HealthStatus, SystemHealth
+from .health import SystemHealth
 
 
 @dataclass

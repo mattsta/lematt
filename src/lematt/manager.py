@@ -132,7 +132,7 @@ class CertificateManager:
     def acme(self) -> object:
         """Lazily load the ACME module."""
         if self._acme_module is None:
-            import acme_tiny
+            from . import acme_tiny
 
             self._acme_module = acme_tiny
         return self._acme_module

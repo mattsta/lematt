@@ -5,15 +5,13 @@ certificate status, health metrics, and system information with auto-refresh.
 """
 
 import signal
-import sys
-import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
 
-from rich.console import Console, Group
+from rich.console import Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel

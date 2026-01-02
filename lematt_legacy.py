@@ -30,6 +30,7 @@ Brief (very brief) overview of acronyms and terms:
 import argparse
 import collections
 import configparser
+import contextlib
 import datetime
 import itertools
 import json
@@ -37,7 +38,6 @@ import logging
 import multiprocessing
 import os
 import pathlib
-import re
 import shlex
 import socket
 import ssl
@@ -45,12 +45,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from configparser import SectionProxy
 from dataclasses import dataclass, field
 from datetime import timedelta  # make some lines shorter
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 import acme_tiny  # distributed with lematt
 
@@ -511,17 +510,13 @@ def get_certificate_info(cert_path: str) -> CertificateInfo:
 
         for line in result.stdout.strip().split("\n"):
             if line.startswith("notAfter="):
-                try:
+                with contextlib.suppress(ValueError):
                     info.not_after = datetime.datetime.strptime(line[9:], ssl_date_fmt)
-                except ValueError:
-                    pass
             elif line.startswith("notBefore="):
-                try:
+                with contextlib.suppress(ValueError):
                     info.not_before = datetime.datetime.strptime(
                         line[10:], ssl_date_fmt
                     )
-                except ValueError:
-                    pass
             elif line.startswith("subject="):
                 # Extract CN from subject
                 import re
@@ -676,19 +671,13 @@ def log(what: str, mode: str = "", update: bool = False) -> None:
     # Handle empty messages (visual separators)
     if not what:
         if not IS_CRON:
-            print("")
+            print()
         return
 
     # Build the message
-    if IS_TEST:
-        prefix = "[TEST] "
-    else:
-        prefix = "> "
+    prefix = "[TEST] " if IS_TEST else "> "
 
-    if mode:
-        mode_str = f"[{mode}] "
-    else:
-        mode_str = ""
+    mode_str = f"[{mode}] " if mode else ""
 
     message = f"{prefix}{mode_str}{what}"
 
@@ -705,10 +694,7 @@ def log(what: str, mode: str = "", update: bool = False) -> None:
 
 def getSubdir(subdir: str) -> str:
     """Return the appropriate subdirectory path based on test/prod mode."""
-    if IS_TEST:
-        base = "test/"
-    else:
-        base = "prod/"
+    base = "test/" if IS_TEST else "prod/"
 
     return base + subdir
 
@@ -1004,10 +990,7 @@ def certNeedsRenewal(
             # cert has already expired!
             return True
 
-        if remaining < REAUTHORIZE_DAYS_IN_ADVANCE:
-            return True
-
-        return False
+        return remaining < REAUTHORIZE_DAYS_IN_ADVANCE
 
     # Future - Past (now), ideally
     ssl_date_fmt = r"%b %d %H:%M:%S %Y %Z"
@@ -1026,10 +1009,7 @@ class CertificateRequestError(Exception):
 def requestCert(
     csr: str, outCert: str, isTest: bool = False, max_retries: int = 3
 ) -> bool:
-    if isTest:
-        directory = STAGING
-    else:
-        directory = PRODUCTION
+    directory = STAGING if isTest else PRODUCTION
 
     # This is where we can plug in different cert request methods.
     # Right now we just pulled in acme_tiny which is a simple
@@ -1077,10 +1057,7 @@ def prepareDomainForUpdate(domain):
     else:
         actions = domainActions["default"]
 
-    if "every" in domainActions:
-        allActions = domainActions["every"]
-    else:
-        allActions = []
+    allActions = domainActions.get("every", [])
 
     def prepare(acts):
         return [runAsync(X.replace("DOMAIN", domain)) for X in acts["prepare"]]
@@ -1193,10 +1170,8 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
                         f"Warning: Could not create symlink {singleDomainKey}: {e}",
                         "WARN",
                     )
-                    try:
+                    with contextlib.suppress(OSError):
                         os.unlink(temp_link)
-                    except OSError:
-                        pass
 
         def generateCSR_():
             """Either: use CSR if exists or create new if requested"""
@@ -1274,10 +1249,8 @@ def generateKeysAndCertsAndRequestSignedCerts(configuredDomain, domainActions, k
                 log(
                     f"Warning: Could not create symlink {singleDomainCert}: {e}", "WARN"
                 )
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(temp_link)
-                except OSError:
-                    pass
 
         # NOTE: if you have DUPLICATE certificates like a single
         #       domain certificate with the same in another cert's SANs,

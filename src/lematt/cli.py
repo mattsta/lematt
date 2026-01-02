@@ -6,6 +6,7 @@ for the lematt certificate management tool.
 
 import argparse
 import configparser
+import contextlib
 import json
 import os
 import sys
@@ -757,10 +758,8 @@ def main() -> int:
 
         logger.info("Launching interactive dashboard...")
         logger.info("Press 'q' to quit, 'r' to refresh, 'p' to pause")
-        try:
+        with contextlib.suppress(KeyboardInterrupt):
             dashboard.run()
-        except KeyboardInterrupt:
-            pass
         return 0
 
     # Handle --report: generate certificate report
@@ -772,7 +771,7 @@ def main() -> int:
             return 1
 
         from lematt.health import HealthChecker
-        from lematt.reports import Report, ReportConfig, generate_full_report
+        from lematt.reports import generate_full_report
 
         domains = load_domains(config_base)
 
@@ -982,20 +981,40 @@ def main() -> int:
         progress_callback=progress_callback,
     )
 
-    summary = executor.process_batch(
-        domains=configured_domains,
-        domain_actions=action_runner.domain_actions,
-    )
+    interrupted = False
+    try:
+        summary = executor.process_batch(
+            domains=configured_domains,
+            domain_actions=action_runner.domain_actions,
+        )
+    except KeyboardInterrupt:
+        # Gracefully handle interrupt - still run hooks for successful renewals
+        logger.warning("Interrupted by user - processing successful renewals...")
+        interrupted = True
+        summary = executor._summary
 
     # Log final summary
     logger.info(
-        f"Completed: {summary.total_domains} certificates - "
+        f"{'Interrupted - Partial results' if interrupted else 'Completed'}: "
+        f"{summary.total_domains} certificates - "
         f"Renewed: {summary.renewed_count}, Failed: {summary.failed_count}, "
         f"Skipped: {summary.skipped_count}"
     )
 
-    # Process updated certificates (run actions)
-    action_runner.process_updated_certs(summary.results)
+    # CRITICAL: Process updated certificates (run after-issue hooks)
+    # This must run even if interrupted to ensure successful renewals are deployed
+    if summary.results:
+        try:
+            action_runner.process_updated_certs(summary.results)
+        except Exception as e:
+            logger.error(f"Error running after-issue hooks: {e}")
+            if not interrupted:
+                raise
+
+    # Exit with error code if interrupted
+    if interrupted:
+        logger.warning("Exiting due to interrupt - after-issue hooks completed")
+        sys.exit(130)  # Standard exit code for SIGINT
 
     return 0
 
