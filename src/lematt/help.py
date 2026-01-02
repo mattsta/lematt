@@ -7,9 +7,8 @@ and interactive help browsing.
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Protocol
 
-from rich.console import Console, Group
+from rich.console import Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -17,7 +16,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from .display import StatusStyle, console
+from .display import console
 
 
 class HelpCategory(Enum):

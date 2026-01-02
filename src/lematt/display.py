@@ -5,7 +5,6 @@ All display components are designed to be reusable and composable.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol
 
 from rich.console import Console, Group

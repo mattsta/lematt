@@ -218,6 +218,7 @@ class CertificateExecutor:
 
     # Internal state with clean defaults
     progress: BatchProgress = field(default_factory=BatchProgress)
+    _summary: RenewalSummary = field(default_factory=RenewalSummary, repr=False)
     _shutdown_event: threading.Event = field(
         default_factory=threading.Event, repr=False
     )
@@ -293,66 +294,81 @@ class CertificateExecutor:
                     )
                 )
 
-        # Initialize progress tracking
+        # Initialize progress tracking and summary
         self.progress = BatchProgress(total=len(work_items))
+        self._summary = RenewalSummary()
         for item in work_items:
             self.progress.tasks[item.task_key] = TaskProgress(
                 domain=item.domain_config.primary_domain,
                 key_type=item.key_type,
             )
 
-        summary = RenewalSummary()
-
         if self.max_workers <= 1:
             # Sequential processing
-            return self._process_sequential(work_items, domain_actions, summary)
+            return self._process_sequential(work_items, domain_actions)
 
         # Parallel processing with proper error handling
-        return self._process_parallel(work_items, domains, summary)
+        return self._process_parallel(work_items, domains)
 
     def _process_sequential(
         self,
         work_items: list[WorkItem],
         domain_actions: DomainActions,
-        summary: RenewalSummary,
     ) -> RenewalSummary:
         """Process work items sequentially."""
         from lematt.manager import CertificateManager
 
-        manager = CertificateManager(self.config)
+        self._setup_signal_handlers()
 
-        for item in work_items:
-            if self._shutdown_event.is_set():
-                self.progress.update(item.task_key, TaskStatus.CANCELLED)
-                continue
+        try:
+            manager = CertificateManager(self.config)
 
-            self.progress.update(item.task_key, TaskStatus.RUNNING)
+            for item in work_items:
+                if self._shutdown_event.is_set():
+                    logger.info(f"Skipping {item.task_key} due to shutdown request")
+                    self.progress.update(item.task_key, TaskStatus.CANCELLED)
+                    continue
+
+                self.progress.update(item.task_key, TaskStatus.RUNNING)
+                self._log_progress()
+
+                try:
+                    result = manager.process_domain(
+                        item.domain_config,
+                        item.key_type,
+                        domain_actions,
+                    )
+                    self._summary.add_result(result)
+
+                    if result.success:
+                        self.progress.update(item.task_key, TaskStatus.SUCCESS)
+                    else:
+                        self.progress.update(
+                            item.task_key,
+                            TaskStatus.FAILED,
+                            result.error_message or "Unknown error",
+                        )
+                except KeyboardInterrupt:
+                    # Signal handler should have caught this, but if not,
+                    # set shutdown event and continue to allow graceful cleanup
+                    logger.warning(
+                        f"Interrupted during {item.task_key}, stopping after current batch"
+                    )
+                    self._shutdown_event.set()
+                    self.progress.update(
+                        item.task_key, TaskStatus.CANCELLED, "Interrupted by user"
+                    )
+                    break
+
             self._log_progress()
-
-            result = manager.process_domain(
-                item.domain_config,
-                item.key_type,
-                domain_actions,
-            )
-            summary.add_result(result)
-
-            if result.success:
-                self.progress.update(item.task_key, TaskStatus.SUCCESS)
-            else:
-                self.progress.update(
-                    item.task_key,
-                    TaskStatus.FAILED,
-                    result.error_message or "Unknown error",
-                )
-
-        self._log_progress()
-        return summary
+            return self._summary
+        finally:
+            self._restore_signal_handlers()
 
     def _process_parallel(
         self,
         work_items: list[WorkItem],
         domains: list[DomainConfig],
-        summary: RenewalSummary,
     ) -> RenewalSummary:
         """Process work items in parallel with error isolation."""
         self._setup_signal_handlers()
@@ -400,7 +416,7 @@ class CertificateExecutor:
                             timeout=300
                         )  # 5 minute timeout per cert
                         result = self._dict_to_result(result_dict, domain_lookup)
-                        summary.add_result(result)
+                        self._summary.add_result(result)
 
                         if result.success:
                             self.progress.update(item.task_key, TaskStatus.SUCCESS)
@@ -415,7 +431,7 @@ class CertificateExecutor:
                         self.progress.update(
                             item.task_key, TaskStatus.FAILED, "Timeout"
                         )
-                        summary.add_result(
+                        self._summary.add_result(
                             CertificateResult(
                                 domain_config=item.domain_config,
                                 key_type=item.key_type,
@@ -427,7 +443,7 @@ class CertificateExecutor:
                     except Exception as e:
                         logger.error(f"Error processing {item.task_key}: {e}")
                         self.progress.update(item.task_key, TaskStatus.FAILED, str(e))
-                        summary.add_result(
+                        self._summary.add_result(
                             CertificateResult(
                                 domain_config=item.domain_config,
                                 key_type=item.key_type,
@@ -442,7 +458,7 @@ class CertificateExecutor:
         finally:
             self._restore_signal_handlers()
 
-        return summary
+        return self._summary
 
     def _dict_to_result(
         self,

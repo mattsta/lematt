@@ -3,7 +3,6 @@
 import argparse
 import base64
 import binascii
-import copy
 import hashlib
 import json
 import logging
