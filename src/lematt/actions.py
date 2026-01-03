@@ -179,13 +179,55 @@ class ActionRunner:
         Args:
             processes: List of processes to kill. Uses stored processes if None.
         """
+        import os
+        import signal
+
         procs = processes if processes is not None else self._prepare_processes
 
         if not procs:
             return
 
+        logger.debug(f"[PREPARE] Cleaning up {len(procs)} prepare process(es)")
+        killed_count = 0
         for proc in procs:
-            proc.kill()
+            try:
+                # Kill entire process group to ensure child processes are also killed
+                if proc.poll() is None:  # Process still running
+                    try:
+                        # Try killing process group first (for shell=True spawned processes)
+                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                        try:
+                            proc.wait(timeout=2)
+                            killed_count += 1
+                            logger.debug(
+                                f"[PREPARE] Terminated process group for PID {proc.pid}"
+                            )
+                        except subprocess.TimeoutExpired:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                            proc.wait()
+                            killed_count += 1
+                            logger.debug(
+                                f"[PREPARE] Force killed process group for PID {proc.pid}"
+                            )
+                    except (OSError, ProcessLookupError):
+                        # No process group, kill just the process
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=2)
+                            killed_count += 1
+                            logger.debug(f"[PREPARE] Terminated process PID {proc.pid}")
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait()
+                            killed_count += 1
+                            logger.debug(
+                                f"[PREPARE] Force killed process PID {proc.pid}"
+                            )
+            except (OSError, ProcessLookupError):
+                pass  # Process already exited
+
+        if killed_count > 0:
+            logger.info(f"[PREPARE] Cleaned up {killed_count} prepare process(es)")
 
         # Reset terminal if needed
         with contextlib.suppress(subprocess.CalledProcessError, OSError):

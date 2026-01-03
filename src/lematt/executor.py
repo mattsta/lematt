@@ -5,6 +5,7 @@ with proper error isolation, rate limiting, progress tracking, and graceful
 shutdown handling.
 """
 
+import multiprocessing
 import signal
 import threading
 import time
@@ -27,6 +28,48 @@ from lematt.config import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+# Global lock manager for domain-level prepare action serialization
+# This ensures only one prepare action runs per domain at a time,
+# preventing port conflicts when parallel processing multiple key types
+_lock_manager: multiprocessing.managers.SyncManager | None = None
+_domain_locks: multiprocessing.managers.DictProxy | None = None  # type: ignore[type-arg]
+
+
+def _init_domain_locks() -> None:
+    """Initialize the global domain lock manager for parallel processing."""
+    global _lock_manager, _domain_locks
+    if _lock_manager is None:
+        _lock_manager = multiprocessing.Manager()
+        _domain_locks = _lock_manager.dict()
+
+
+def _shutdown_domain_locks() -> None:
+    """Shutdown the domain lock manager."""
+    global _lock_manager, _domain_locks
+    if _lock_manager is not None:
+        _lock_manager.shutdown()
+        _lock_manager = None
+        _domain_locks = None
+
+
+def _get_domain_lock(domain: str) -> multiprocessing.synchronize.Lock:
+    """Get or create a lock for a specific domain.
+
+    Args:
+        domain: Domain name to get lock for.
+
+    Returns:
+        Lock for the domain.
+    """
+    global _domain_locks, _lock_manager
+    if _domain_locks is None or _lock_manager is None:
+        raise RuntimeError("Domain locks not initialized")
+
+    if domain not in _domain_locks:
+        _domain_locks[domain] = _lock_manager.Lock()
+
+    return _domain_locks[domain]  # type: ignore[return-value,no-any-return]
 
 
 class TaskStatus(Enum):
@@ -170,13 +213,16 @@ def _process_certificate_worker(
     key_type: KeyType,
     config: LemattConfig,
     domain_actions: DomainActions,
-) -> dict[str, object]:
-    """Worker function for processing a single certificate.
+) -> list[dict[str, object]]:
+    """Worker function for processing a domain with ALL key types.
 
     This function runs in a separate process and must be a top-level
     function (not a method or lambda) for proper pickling.
 
-    Returns a serializable dict (via WorkerResult.to_dict()) to avoid
+    CRITICAL: Processes ALL key types (RSA + EC) together with shared prepare
+    processes to prevent "port already in use" errors.
+
+    Returns a list of serializable dicts (via WorkerResult.to_dict()) to avoid
     pickling issues with complex objects across process boundaries.
     """
     # Import here to avoid circular imports and ensure fresh state in worker
@@ -184,29 +230,37 @@ def _process_certificate_worker(
 
     try:
         manager = CertificateManager(config)
-        result = manager.process_domain(domain_config, key_type, domain_actions)
+        # Process entire domain with all key types (prepare runs ONCE)
+        results = manager.process_domain_all_keys(domain_config, domain_actions)
 
-        return WorkerResult(
-            domain=result.domain,
-            key_type=str(result.key_type),
-            success=result.success,
-            renewed=result.renewed,
-            cert_path=result.cert_path,
-            key_path=result.key_path,
-            error_message=result.error_message,
-            all_domains=domain_config.all_domains,
-        ).to_dict()
+        return [
+            WorkerResult(
+                domain=result.domain,
+                key_type=str(result.key_type),
+                success=result.success,
+                renewed=result.renewed,
+                cert_path=result.cert_path,
+                key_path=result.key_path,
+                error_message=result.error_message,
+                all_domains=domain_config.all_domains,
+            ).to_dict()
+            for result in results
+        ]
     except Exception as e:
         # Catch ALL exceptions to prevent worker crashes from propagating
-        return WorkerResult(
-            domain=domain_config.primary_domain,
-            key_type=str(key_type),
-            success=False,
-            renewed=True,  # We tried to renew
-            error_message=f"Worker exception: {e!s}",
-            all_domains=domain_config.all_domains,
-            exception=str(e),
-        ).to_dict()
+        # Return failures for both key types
+        return [
+            WorkerResult(
+                domain=domain_config.primary_domain,
+                key_type=str(kt),
+                success=False,
+                renewed=True,  # We tried to renew
+                error_message=f"Worker exception: {e!s}",
+                all_domains=domain_config.all_domains,
+                exception=str(e),
+            ).to_dict()
+            for kt in [KeyType.RSA, KeyType.EC]
+        ]
 
 
 @dataclass
@@ -359,27 +413,33 @@ class CertificateExecutor:
         Returns:
             RenewalSummary with all results.
         """
-        # Build work items
+        # Build work items - one per DOMAIN (not per key type)
+        # This ensures prepare actions run once per domain and stay alive for all key types
         work_items: list[WorkItem] = []
         for domain_config in domains:
-            for key_type in [KeyType.RSA, KeyType.EC]:
-                work_items.append(
-                    WorkItem(
-                        domain_config=domain_config,
-                        key_type=key_type,
-                        config=self.config,
-                        domain_actions=domain_actions,
-                    )
+            # Process entire domain (both RSA and EC) as a single work unit
+            # to prevent concurrent prepare actions
+            work_items.append(
+                WorkItem(
+                    domain_config=domain_config,
+                    key_type=KeyType.RSA,  # Placeholder - will process all key types
+                    config=self.config,
+                    domain_actions=domain_actions,
                 )
+            )
 
         # Initialize progress tracking and summary
-        self.progress = BatchProgress(total=len(work_items))
+        # Note: Total is domains * 2 (RSA + EC per domain)
+        self.progress = BatchProgress(total=len(work_items) * 2)
         self._summary = RenewalSummary()
         for item in work_items:
-            self.progress.tasks[item.task_key] = TaskProgress(
-                domain=item.domain_config.primary_domain,
-                key_type=item.key_type,
-            )
+            # Track both RSA and EC for each domain
+            for key_type in [KeyType.RSA, KeyType.EC]:
+                task_key = f"{item.domain_config.primary_domain}[{key_type}]"
+                self.progress.tasks[task_key] = TaskProgress(
+                    domain=item.domain_config.primary_domain,
+                    key_type=key_type,
+                )
 
         if self.max_workers <= 1:
             # Sequential processing
@@ -402,48 +462,61 @@ class CertificateExecutor:
             manager = CertificateManager(self.config)
 
             for item in work_items:
-                # Check shutdown BEFORE starting each item
+                # Check shutdown BEFORE starting each domain
                 if self._shutdown_event.is_set():
-                    logger.info(f"Skipping {item.task_key} due to shutdown request")
-                    self.progress.update(item.task_key, TaskStatus.CANCELLED)
+                    # Cancel all key types for this domain
+                    for key_type in [KeyType.RSA, KeyType.EC]:
+                        task_key = f"{item.domain_config.primary_domain}[{key_type}]"
+                        logger.info(f"Skipping {task_key} due to shutdown request")
+                        self.progress.update(task_key, TaskStatus.CANCELLED)
                     continue
 
-                self.progress.update(item.task_key, TaskStatus.RUNNING)
                 logger.info(
-                    f"▶ Starting: {item.domain_config.primary_domain} [{item.key_type}]"
+                    f"▶ Starting domain: {item.domain_config.primary_domain} (RSA + EC)"
                 )
+
+                # Update progress for both key types
+                for key_type in [KeyType.RSA, KeyType.EC]:
+                    task_key = f"{item.domain_config.primary_domain}[{key_type}]"
+                    self.progress.update(task_key, TaskStatus.RUNNING)
                 self._log_progress()
 
                 try:
-                    result = manager.process_domain(
+                    # Process entire domain with all key types (prepare runs ONCE)
+                    results = manager.process_domain_all_keys(
                         item.domain_config,
-                        item.key_type,
                         domain_actions,
                     )
-                    self._summary.add_result(result)
 
-                    if result.success:
-                        self.progress.update(item.task_key, TaskStatus.SUCCESS)
-                        if result.renewed:
-                            logger.success(
-                                f"✓ Renewed: {item.domain_config.primary_domain} [{item.key_type}]"
-                            )
+                    # Add all results and update progress
+                    for result in results:
+                        self._summary.add_result(result)
+                        task_key = (
+                            f"{result.domain_config.primary_domain}[{result.key_type}]"
+                        )
+
+                        if result.success:
+                            self.progress.update(task_key, TaskStatus.SUCCESS)
+                            if result.renewed:
+                                logger.success(
+                                    f"✓ Renewed: {result.domain_config.primary_domain} [{result.key_type}]"
+                                )
+                            else:
+                                logger.info(
+                                    f"✓ Valid: {result.domain_config.primary_domain} [{result.key_type}] (skipped)"
+                                )
                         else:
-                            logger.info(
-                                f"✓ Valid: {item.domain_config.primary_domain} [{item.key_type}] (skipped)"
+                            self.progress.update(
+                                task_key,
+                                TaskStatus.FAILED,
+                                result.error_message or "Unknown error",
                             )
-                    else:
-                        self.progress.update(
-                            item.task_key,
-                            TaskStatus.FAILED,
-                            result.error_message or "Unknown error",
-                        )
-                        logger.error(
-                            f"✗ Failed: {item.domain_config.primary_domain} [{item.key_type}] - "
-                            f"{result.error_message or 'Unknown error'}"
-                        )
+                            logger.error(
+                                f"✗ Failed: {result.domain_config.primary_domain} [{result.key_type}] - "
+                                f"{result.error_message or 'Unknown error'}"
+                            )
 
-                    # Check shutdown AFTER completing each item
+                    # Check shutdown AFTER completing each domain
                     if self._shutdown_event.is_set():
                         logger.info("Shutdown requested - stopping batch processing")
                         break
@@ -472,6 +545,9 @@ class CertificateExecutor:
     ) -> RenewalSummary:
         """Process work items in parallel with error isolation."""
         self._setup_signal_handlers()
+
+        # Initialize domain locks to prevent concurrent prepare actions per domain
+        _init_domain_locks()
 
         # Create domain lookup for result reconstruction
         domain_lookup = {d.primary_domain: d for d in domains}
@@ -541,62 +617,76 @@ class CertificateExecutor:
                             )  # Reset timer on activity
 
                             try:
-                                result_dict = future.result(timeout=300)
-                                result = self._dict_to_result(
-                                    result_dict, domain_lookup
-                                )
-                                self._summary.add_result(result)
+                                # Worker now returns list of results (one per key type)
+                                result_dicts = future.result(timeout=300)
+                                for result_dict in result_dicts:
+                                    result = self._dict_to_result(
+                                        result_dict, domain_lookup
+                                    )
+                                    self._summary.add_result(result)
 
-                                if result.success:
-                                    self.progress.update(
-                                        item.task_key, TaskStatus.SUCCESS
-                                    )
-                                    if result.renewed:
-                                        logger.success(
-                                            f"✓ Renewed: {item.domain_config.primary_domain} [{item.key_type}]"
+                                    task_key = f"{result.domain_config.primary_domain}[{result.key_type}]"
+
+                                    if result.success:
+                                        self.progress.update(
+                                            task_key, TaskStatus.SUCCESS
                                         )
+                                        if result.renewed:
+                                            logger.success(
+                                                f"✓ Renewed: {result.domain_config.primary_domain} [{result.key_type}]"
+                                            )
+                                        else:
+                                            logger.info(
+                                                f"✓ Valid: {result.domain_config.primary_domain} [{result.key_type}] (skipped)"
+                                            )
                                     else:
-                                        logger.info(
-                                            f"✓ Valid: {item.domain_config.primary_domain} [{item.key_type}] (skipped)"
+                                        self.progress.update(
+                                            task_key,
+                                            TaskStatus.FAILED,
+                                            result.error_message or "Unknown error",
                                         )
-                                else:
-                                    self.progress.update(
-                                        item.task_key,
-                                        TaskStatus.FAILED,
-                                        result.error_message or "Unknown error",
-                                    )
-                                    logger.error(
-                                        f"✗ Failed: {item.domain_config.primary_domain} [{item.key_type}] - "
-                                        f"{result.error_message or 'Unknown error'}"
-                                    )
+                                        logger.error(
+                                            f"✗ Failed: {result.domain_config.primary_domain} [{result.key_type}] - "
+                                            f"{result.error_message or 'Unknown error'}"
+                                        )
                             except TimeoutError:
-                                logger.error(f"Timeout processing {item.task_key}")
-                                self.progress.update(
-                                    item.task_key, TaskStatus.FAILED, "Timeout"
+                                logger.error(
+                                    f"Timeout processing domain {item.domain_config.primary_domain}"
                                 )
-                                self._summary.add_result(
-                                    CertificateResult(
-                                        domain_config=item.domain_config,
-                                        key_type=item.key_type,
-                                        success=False,
-                                        renewed=True,
-                                        error_message="Processing timeout",
+                                # Mark both key types as failed
+                                for key_type in [KeyType.RSA, KeyType.EC]:
+                                    task_key = f"{item.domain_config.primary_domain}[{key_type}]"
+                                    self.progress.update(
+                                        task_key, TaskStatus.FAILED, "Timeout"
                                     )
-                                )
+                                    self._summary.add_result(
+                                        CertificateResult(
+                                            domain_config=item.domain_config,
+                                            key_type=key_type,
+                                            success=False,
+                                            renewed=True,
+                                            error_message="Processing timeout",
+                                        )
+                                    )
                             except Exception as e:
-                                logger.error(f"Error processing {item.task_key}: {e}")
-                                self.progress.update(
-                                    item.task_key, TaskStatus.FAILED, str(e)
+                                logger.error(
+                                    f"Error processing domain {item.domain_config.primary_domain}: {e}"
                                 )
-                                self._summary.add_result(
-                                    CertificateResult(
-                                        domain_config=item.domain_config,
-                                        key_type=item.key_type,
-                                        success=False,
-                                        renewed=True,
-                                        error_message=f"Executor error: {e}",
+                                # Mark both key types as failed
+                                for key_type in [KeyType.RSA, KeyType.EC]:
+                                    task_key = f"{item.domain_config.primary_domain}[{key_type}]"
+                                    self.progress.update(
+                                        task_key, TaskStatus.FAILED, str(e)
                                     )
-                                )
+                                    self._summary.add_result(
+                                        CertificateResult(
+                                            domain_config=item.domain_config,
+                                            key_type=key_type,
+                                            success=False,
+                                            renewed=True,
+                                            error_message=f"Executor error: {e}",
+                                        )
+                                    )
 
                             self._log_progress()
                             break  # Process one future at a time
@@ -607,6 +697,8 @@ class CertificateExecutor:
         finally:
             self._executor = None  # Clear executor reference
             self._restore_signal_handlers()
+            # Shutdown domain lock manager
+            _shutdown_domain_locks()
 
         return self._summary
 

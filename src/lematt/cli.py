@@ -5,6 +5,7 @@ for the lematt certificate management tool.
 """
 
 import argparse
+import atexit
 import configparser
 import contextlib
 import json
@@ -19,6 +20,22 @@ from lematt.config import DomainConfig, LemattConfig
 from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import setup_logging
 from lematt.manager import CertificateManager
+
+# Global action runner for emergency cleanup
+_global_action_runner: ActionRunner | None = None
+
+
+def _emergency_cleanup() -> None:
+    """Emergency cleanup handler to kill any remaining prepare processes."""
+    if _global_action_runner is not None:
+        try:
+            _global_action_runner.cleanup_prepare()
+        except Exception:
+            pass  # Suppress errors during exit
+
+
+# Register emergency cleanup handler
+atexit.register(_emergency_cleanup)
 
 # Rich display imports (lazy loaded for commands that need them)
 HAS_RICH = True
@@ -1005,6 +1022,10 @@ def main() -> int:
     action_runner = ActionRunner(lematt_config)
     action_runner.load_actions()
 
+    # Register for emergency cleanup on exit
+    global _global_action_runner
+    _global_action_runner = action_runner
+
     # Process certificates using the robust executor
     progress_callback = (
         create_progress_printer(verbose=args.verbose) if not args.is_cron else None
@@ -1046,6 +1067,13 @@ def main() -> int:
             logger.error(f"Error running after-issue hooks: {e}")
             if not interrupted:
                 raise
+
+    # CRITICAL: Ensure all prepare processes are cleaned up
+    try:
+        action_runner.cleanup_prepare()
+        logger.debug("Cleaned up all prepare processes")
+    except Exception as e:
+        logger.warning(f"Error during prepare process cleanup: {e}")
 
     # Exit with error code if interrupted
     if interrupted:
