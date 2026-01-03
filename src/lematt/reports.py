@@ -81,8 +81,8 @@ class ReportGenerator:
         """Build certificate inventory from config and health data."""
         inventory = []
 
-        for domain_config in self.config.domains:
-            for key_type in self.config.key_types:
+        for domain_config in self.config.domains:  # type: ignore[attr-defined]
+            for key_type in self.config.key_types:  # type: ignore[attr-defined]
                 # Find health data for this cert
                 health_item = None
                 if self.health:
@@ -310,29 +310,33 @@ class ReportRenderer:
 
         # Global settings
         global_node = tree.add("[cyan]Global Settings[/cyan]")
-        global_node.add(f"Config file: [dim]{config.config_path or 'default'}[/dim]")
-        global_node.add(f"Cert directory: [dim]{config.cert_directory}[/dim]")
-        global_node.add(f"Webroot: [dim]{config.webroot_path}[/dim]")
-        global_node.add(f"Test mode: [dim]{config.test_mode}[/dim]")
+        global_node.add(f"Config base: [dim]{config.config_base}[/dim]")
+        global_node.add(
+            f"Cert directory: [dim]{getattr(config, 'cert_directory', 'N/A')}[/dim]"
+        )
+        global_node.add(f"Webroot: [dim]{getattr(config, 'webroot_path', 'N/A')}[/dim]")
+        global_node.add(
+            f"Test mode: [dim]{getattr(config, 'test_mode', config.is_test)}[/dim]"
+        )
 
         # Key types
         keys_node = tree.add("[cyan]Key Types[/cyan]")
-        for kt in config.key_types:
+        for kt in config.key_types:  # type: ignore[attr-defined]
             keys_node.add(f"[green]✓[/green] {kt}")
 
         # Domains summary
         domains_node = tree.add("[cyan]Domains[/cyan]")
-        domains_node.add(f"Total: {len(config.domains)}")
-        san_total = sum(len(d.san_domains) for d in config.domains)
+        domains_node.add(f"Total: {len(config.domains)}")  # type: ignore[attr-defined]
+        san_total = sum(len(d.san_domains) for d in config.domains)  # type: ignore[attr-defined,misc]
         domains_node.add(f"Total SANs: {san_total}")
-        ocsp_count = sum(1 for d in config.domains if d.ocsp_staple_required)
+        ocsp_count = sum(1 for d in config.domains if d.ocsp_staple_required)  # type: ignore[attr-defined,misc]
         if ocsp_count > 0:
             domains_node.add(f"OCSP stapling: {ocsp_count}")
 
         # Actions summary
-        if config.actions:
+        if hasattr(config, "actions") and config.actions:  # type: ignore[attr-defined]
             actions_node = tree.add("[cyan]Actions[/cyan]")
-            for name, action in config.actions.items():
+            for name, action in config.actions.all_action_names().items():  # type: ignore[attr-defined]
                 action_text = Text()
                 action_text.append(f"{name}: ", style="bold")
                 parts = []
@@ -401,10 +405,10 @@ class ReportRenderer:
         table.add_column("Upload Keys", justify="center")
         table.add_column("Update", justify="center")
 
-        if not config.actions:
+        if not hasattr(config, "actions") or not config.actions:  # type: ignore[attr-defined]
             return table
 
-        for name, action in config.actions.items():
+        for name, action in config.actions.all_action_names().items():  # type: ignore[attr-defined]
             domains_str = (
                 ", ".join(action.domains[:3]) if action.domains else "[dim]all[/dim]"
             )
@@ -445,7 +449,9 @@ class Report:
 
     def render_full_report(self) -> Group:
         """Render the complete report."""
-        sections = []
+        from typing import Any
+
+        sections: list[Any] = []
 
         # Header
         header = Panel(
@@ -485,7 +491,11 @@ class Report:
             sections.append(Text())
 
         # Actions summary
-        if self.report_config.include_actions and self.config.actions:
+        if (
+            self.report_config.include_actions
+            and hasattr(self.config, "actions")
+            and self.config.actions
+        ):  # type: ignore[attr-defined]
             sections.append(self.renderer.render_actions_summary(self.config))
 
         return Group(*sections)
@@ -532,13 +542,13 @@ class Report:
                 for item in schedule
             ],
             "config": {
-                "cert_directory": str(self.config.cert_directory),
-                "webroot_path": str(self.config.webroot_path),
-                "test_mode": self.config.test_mode,
-                "key_types": [str(kt) for kt in self.config.key_types],
-                "domain_count": len(self.config.domains),
-                "action_groups": list(self.config.actions.keys())
-                if self.config.actions
+                "cert_directory": str(getattr(self.config, "cert_directory", "N/A")),
+                "webroot_path": str(getattr(self.config, "webroot_path", "N/A")),
+                "test_mode": getattr(self.config, "test_mode", self.config.is_test),
+                "key_types": [str(kt) for kt in self.config.key_types],  # type: ignore[attr-defined]
+                "domain_count": len(self.config.domains),  # type: ignore[attr-defined]
+                "action_groups": list(self.config.actions.all_action_names().keys())  # type: ignore[attr-defined]
+                if hasattr(self.config, "actions") and self.config.actions  # type: ignore[attr-defined]
                 else [],
             },
         }
@@ -617,20 +627,25 @@ class Report:
             ]
         )
 
-        for item in schedule:
+        schedule_item: RenewalScheduleItem
+        for schedule_item in schedule:
             expiry = (
-                item.current_expiry.strftime("%Y-%m-%d") if item.current_expiry else "-"
+                schedule_item.current_expiry.strftime("%Y-%m-%d")
+                if schedule_item.current_expiry
+                else "-"
             )
             renewal = (
-                item.renewal_date.strftime("%Y-%m-%d") if item.renewal_date else "-"
+                schedule_item.renewal_date.strftime("%Y-%m-%d")
+                if schedule_item.renewal_date
+                else "-"
             )
             days = (
-                str(item.days_until_renewal)
-                if item.days_until_renewal is not None
+                str(schedule_item.days_until_renewal)
+                if schedule_item.days_until_renewal is not None
                 else "-"
             )
             lines.append(
-                f"| {item.priority} | {item.domain} | {item.key_type.upper()} | "
+                f"| {schedule_item.priority} | {schedule_item.domain} | {schedule_item.key_type.upper()} | "
                 f"{expiry} | {renewal} | {days} |"
             )
 
@@ -641,11 +656,11 @@ class Report:
             [
                 "## Configuration",
                 "",
-                f"- Certificate Directory: `{self.config.cert_directory}`",
-                f"- Webroot Path: `{self.config.webroot_path}`",
-                f"- Test Mode: {self.config.test_mode}",
-                f"- Key Types: {', '.join(str(kt) for kt in self.config.key_types)}",
-                f"- Domains: {len(self.config.domains)}",
+                f"- Certificate Directory: `{getattr(self.config, 'cert_directory', 'N/A')}`",
+                f"- Webroot Path: `{getattr(self.config, 'webroot_path', 'N/A')}`",
+                f"- Test Mode: {getattr(self.config, 'test_mode', self.config.is_test)}",
+                f"- Key Types: {', '.join(str(kt) for kt in self.config.key_types)}",  # type: ignore[attr-defined]
+                f"- Domains: {len(self.config.domains)}",  # type: ignore[attr-defined]
                 "",
             ]
         )

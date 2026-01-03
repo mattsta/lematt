@@ -25,7 +25,7 @@ HAS_RICH = True
 try:
     from rich.console import Console
 
-    console = Console()
+    console: Console | None = Console()
 except ImportError:
     HAS_RICH = False
     console = None
@@ -485,7 +485,9 @@ def main() -> int:
     if args.init_notifications:
         from lematt.systemd import generate_notify_config
 
-        notify_path = Path("/etc/lematt/notify.conf")
+        # Use config directory (same as domains, actions.conf, etc.)
+        config_base = os.path.dirname(os.path.realpath(args.config))
+        notify_path = Path(config_base) / "notify.conf"
         if notify_path.exists():
             logger.error(f"Notification config already exists: {notify_path}")
             return 1
@@ -495,7 +497,7 @@ def main() -> int:
             logger.info(f"Created notification config: {notify_path}")
             logger.info("Edit the file to configure your notification backends")
         except PermissionError:
-            logger.error(f"Permission denied writing {notify_path} - run as root")
+            logger.error(f"Permission denied writing {notify_path}")
             return 1
         return 0
 
@@ -582,7 +584,7 @@ def main() -> int:
     read_only_mode = (
         args.dashboard
         or args.health_check
-        or args.status
+        or args.show_status
         or args.report
         or args.list_domains
         or args.validate_only
@@ -813,8 +815,13 @@ def main() -> int:
             rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
             curve_tag=config.get("curveTag", curve),
             is_test=args.is_test,
-            domains=domains,
         )
+
+        # Add dynamic attributes for report generation
+        from lematt.config import KeyType
+
+        report_lematt_config.domains = domains  # type: ignore[attr-defined]
+        report_lematt_config.key_types = [KeyType.RSA, KeyType.EC]  # type: ignore[attr-defined]
 
         # Get health data for report
         health_checker = HealthChecker(
@@ -824,11 +831,12 @@ def main() -> int:
         )
         health = health_checker.check_all_certificates(domains)
 
-        # Load actions for report
+        # Load actions for report (optional)
         action_runner = ActionRunner(report_lematt_config)
         try:
             action_runner.load_actions()
-            report_lematt_config.actions = action_runner.actions.configs
+            # Store actions for report if available
+            report_lematt_config.actions = action_runner.actions  # type: ignore[attr-defined]
         except Exception:
             pass  # Actions not required for report
 
@@ -908,8 +916,8 @@ def main() -> int:
         failure_count = sum(1 for v in results.values() if not v)
 
         for backend_name, success in results.items():
-            status = "✓" if success else "✗"
-            logger.info(f"  {status} {backend_name}")
+            check_mark = "✓" if success else "✗"
+            logger.info(f"  {check_mark} {backend_name}")
 
         if failure_count > 0:
             logger.warning(f"Some notifications failed: {failure_count}/{len(results)}")
@@ -928,7 +936,9 @@ def main() -> int:
         account_key=config["accountKey"],
         reauthorize_days=float(config["reauthorizeDays"]),
         generate_new_certs_after_days=float(config["generateNewCertsAfterDays"]),
-        always_generate_new_keys=config.getboolean("alwaysGenerateNewKeys"),
+        always_generate_new_keys=config.getboolean(
+            "alwaysGenerateNewKeys", fallback=False
+        ),
         rsa_key_bits=rsa_bits,
         ec_curve=curve,
         rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
@@ -959,11 +969,11 @@ def main() -> int:
         logger.info(f"Processing single domain: {args.single_domain}")
 
     # Create manager
-    manager = CertificateManager(lematt_config)
+    cert_manager = CertificateManager(lematt_config)
 
     # Show status and exit if requested
     if args.show_status:
-        status_data = manager.show_status(
+        status_data = cert_manager.show_status(
             configured_domains, json_output=args.json_output
         )
         if args.json_output and status_data:
@@ -989,7 +999,7 @@ def main() -> int:
         return 1
 
     # Ensure directories exist
-    manager.ensure_directories()
+    cert_manager.ensure_directories()
 
     # Load actions
     action_runner = ActionRunner(lematt_config)

@@ -92,3 +92,9 @@ disallow_untyped_defs = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18.2",
+    "types-cryptography>=3.3.23.2",
+]
