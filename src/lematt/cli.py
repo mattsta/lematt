@@ -104,12 +104,15 @@ def load_domains(config_base: str) -> list[DomainConfig]:
 def validate_config(
     config: configparser.SectionProxy,
     config_base: str,
+    require_write_access: bool = True,
 ) -> bool:
     """Validate configuration values and provide helpful error messages.
 
     Args:
         config: Configuration section.
         config_base: Base configuration directory.
+        require_write_access: Whether write access to challenge dir is required.
+                             Set to False for read-only operations (dashboard, health-check, etc.)
 
     Returns:
         True if configuration is valid.
@@ -117,14 +120,17 @@ def validate_config(
     errors: list[str] = []
     warnings: list[str] = []
 
-    # Required keys
-    required_keys = ["challengeDropDir", "accountKey"]
+    # Required keys - accountKey always required, challenge dir only if write access needed
+    required_keys = ["accountKey"]
+    if require_write_access:
+        required_keys.append("challengeDropDir")
+
     for key in required_keys:
         if key not in config or not config[key]:
             errors.append(f"Missing required config: '{key}'")
 
-    # Validate challenge directory
-    if "challengeDropDir" in config:
+    # Validate challenge directory (only if write access needed)
+    if require_write_access and "challengeDropDir" in config:
         challenge_dir = config["challengeDropDir"]
         if not os.path.isdir(challenge_dir):
             errors.append(f"Challenge directory does not exist: {challenge_dir}")
@@ -571,7 +577,18 @@ def main() -> int:
         return 1
 
     config = conf["config"]
-    validate_config(config, config_base)
+
+    # Determine if we're in read-only mode (no challenge dir needed)
+    read_only_mode = (
+        args.dashboard
+        or args.health_check
+        or args.status
+        or args.report
+        or args.list_domains
+        or args.validate_only
+    )
+
+    validate_config(config, config_base, require_write_access=not read_only_mode)
 
     # Handle --validate-config: just validate and exit
     if args.validate_only:
@@ -588,7 +605,9 @@ def main() -> int:
             # Try loading actions to validate that too
             temp_config = LemattConfig(
                 config_base=config_base,
-                challenge_dir=config["challengeDropDir"],
+                challenge_dir=config.get(
+                    "challengeDropDir", "/tmp/lematt-challenges"
+                ),  # May not exist in read-only mode
                 account_key=config["accountKey"],
             )
             action_runner = ActionRunner(temp_config)
@@ -644,7 +663,9 @@ def main() -> int:
         curve = config["curve"]
         health_config = LemattConfig(
             config_base=config_base,
-            challenge_dir=config["challengeDropDir"],
+            challenge_dir=config.get(
+                "challengeDropDir", "/tmp/lematt-challenges"
+            ),  # Dummy value for read-only
             account_key=config["accountKey"],
             rsa_key_bits=rsa_bits,
             ec_curve=curve,
@@ -720,8 +741,8 @@ def main() -> int:
             )
             return 1
 
-        from lematt.dashboard import Dashboard, DashboardConfig
         from lematt.health import HealthChecker
+        from lematt.tui.app import DashboardConfig, LemattDashboardApp
 
         domains = load_domains(config_base)
 
@@ -730,7 +751,9 @@ def main() -> int:
         curve = config["curve"]
         dash_config = LemattConfig(
             config_base=config_base,
-            challenge_dir=config["challengeDropDir"],
+            challenge_dir=config.get(
+                "challengeDropDir", "/tmp/lematt-challenges"
+            ),  # Dummy value for read-only
             account_key=config["accountKey"],
             rsa_key_bits=rsa_bits,
             ec_curve=curve,
@@ -748,18 +771,19 @@ def main() -> int:
         dashboard_config = DashboardConfig(
             refresh_interval=args.dashboard_refresh,
             compact_mode=args.dashboard_compact,
+            warning_days=args.warning_days,
+            critical_days=args.critical_days,
         )
 
-        dashboard = Dashboard(
-            config=dashboard_config,
+        app = LemattDashboardApp(
             health_checker=health_checker,
             domains=domains,
+            config=dashboard_config,
         )
 
-        logger.info("Launching interactive dashboard...")
-        logger.info("Press 'q' to quit, 'r' to refresh, 'p' to pause")
+        # Run the app - keyboard shortcuts shown in footer
         with contextlib.suppress(KeyboardInterrupt):
-            dashboard.run()
+            app.run()
         return 0
 
     # Handle --report: generate certificate report
@@ -780,7 +804,9 @@ def main() -> int:
         curve = config["curve"]
         report_lematt_config = LemattConfig(
             config_base=config_base,
-            challenge_dir=config["challengeDropDir"],
+            challenge_dir=config.get(
+                "challengeDropDir", "/tmp/lematt-challenges"
+            ),  # Dummy value for read-only
             account_key=config["accountKey"],
             rsa_key_bits=rsa_bits,
             ec_curve=curve,

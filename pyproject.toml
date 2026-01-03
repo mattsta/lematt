@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
     "loguru>=0.7", # Modern structured logging
     "rich>=13.0", # Beautiful terminal output, tables, progress bars
+    "textual>=0.47.0", # Interactive TUI framework
 ]
 
 [project.optional-dependencies]
@@ -36,6 +37,7 @@ crypto = ["cryptography>=3.4"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-asyncio>=0.23.0", # For async test support
     "mypy>=1.0",
     "ruff>=0.1",
 ]

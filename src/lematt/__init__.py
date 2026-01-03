@@ -40,6 +40,7 @@ from lematt.dashboard import (
     DashboardConfig,
     DashboardState,
     DashboardView,
+    LemattDashboardApp,
     create_simple_dashboard,
     print_dashboard_snapshot,
 )
@@ -175,6 +176,7 @@ __all__ = [
     "print_info",
     # Dashboard
     "Dashboard",
+    "LemattDashboardApp",
     "DashboardConfig",
     "DashboardState",
     "DashboardView",
