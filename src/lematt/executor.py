@@ -155,6 +155,16 @@ class WorkItem:
         return f"{self.domain_config.primary_domain}:{self.key_type}"
 
 
+def _worker_init() -> None:
+    """Initialize worker processes to ignore SIGINT.
+
+    Worker processes should ignore SIGINT (Ctrl-C) since the parent
+    process handles shutdown coordination. This prevents ugly tracebacks
+    from worker processes when the user interrupts the program.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
 def _process_certificate_worker(
     domain_config: DomainConfig,
     key_type: KeyType,
@@ -222,8 +232,10 @@ class CertificateExecutor:
     _shutdown_event: threading.Event = field(
         default_factory=threading.Event, repr=False
     )
+    _signal_count: int = field(default=0, repr=False)
     _original_sigint: signal.Handlers | None = field(default=None, repr=False)
     _original_sigterm: signal.Handlers | None = field(default=None, repr=False)
+    _executor: ProcessPoolExecutor | None = field(default=None, repr=False)
 
     # Computed fields (require __post_init__)
     rate_limiter: RateLimiter = field(init=False, repr=False)
@@ -252,18 +264,84 @@ class CertificateExecutor:
             signal.signal(signal.SIGTERM, self._original_sigterm)
 
     def _signal_handler(self, signum: int, frame: object) -> None:
-        """Handle shutdown signals gracefully."""
-        logger.warning(f"Received signal {signum}, initiating graceful shutdown...")
-        self._shutdown_event.set()
+        """Handle shutdown signals gracefully.
+
+        First signal: Set shutdown event for graceful cleanup.
+        Second signal: Force immediate executor shutdown and raise KeyboardInterrupt.
+        """
+        self._signal_count += 1
+
+        if self._signal_count == 1:
+            logger.warning(
+                f"Received signal {signum} - graceful shutdown initiated. "
+                "Press Ctrl-C again to force immediate exit."
+            )
+            self._shutdown_event.set()
+        else:
+            logger.error(
+                f"Received signal {signum} again ({self._signal_count} times) - "
+                "forcing immediate exit!"
+            )
+            # Forcefully shut down the executor if it exists
+            if self._executor is not None:
+                logger.warning("Forcefully terminating worker processes...")
+                try:
+                    # Cancel all pending futures and don't wait for workers
+                    self._executor.shutdown(wait=False, cancel_futures=True)
+                except Exception as e:
+                    logger.error(f"Error during forced shutdown: {e}")
+
+            # Restore original handlers
+            self._restore_signal_handlers()
+            # Raise KeyboardInterrupt to let cli.py handle cleanup
+            raise KeyboardInterrupt("Forced shutdown by user")
 
     def _log_progress(self) -> None:
-        """Log current progress."""
+        """Log current progress with domain lists."""
         p = self.progress
+
+        # Build lists of domains by status
+        successful = []
+        failed = []
+        in_progress = []
+        pending = []
+
+        for task_key, task in p.tasks.items():
+            # Extract domain name from task_key (format: "domain.com:rsa" or "domain.com:ec")
+            domain = task.domain
+            key_type = task.key_type
+
+            if task.status == TaskStatus.SUCCESS:
+                successful.append(f"{domain}[{key_type}]")
+            elif task.status == TaskStatus.FAILED:
+                failed.append(f"{domain}[{key_type}]")
+            elif task.status == TaskStatus.RUNNING:
+                in_progress.append(f"{domain}[{key_type}]")
+            elif task.status == TaskStatus.PENDING:
+                pending.append(f"{domain}[{key_type}]")
+
+        # Format the lists for display - SHOW ALL
+        success_list = ", ".join(successful)
+        failed_list = ", ".join(failed)
+        in_progress_list = ", ".join(in_progress)
+        pending_list = ", ".join(pending)
+
+        # Log progress with COMPLETE lists
         logger.info(
-            f"Progress: {p.completed}/{p.total} "
-            f"({p.percent_complete:.1f}%) - "
-            f"Success: {p.succeeded}, Failed: {p.failed}"
+            f"Progress: {p.completed}/{p.total} ({p.percent_complete:.1f}%) - "
+            f"Success: {p.succeeded}, Failed: {p.failed}, "
+            f"In-Progress: {len(in_progress)}, Pending: {len(pending)}"
         )
+
+        if successful:
+            logger.info(f"  ✓ Successful: {success_list}")
+        if failed:
+            logger.warning(f"  ✗ Failed: {failed_list}")
+        if in_progress:
+            logger.info(f"  ▶ In-Progress: {in_progress_list}")
+        if pending:
+            logger.info(f"  ⏳ Pending: {pending_list}")
+
         if self.progress_callback:
             self.progress_callback(p)
 
@@ -324,12 +402,16 @@ class CertificateExecutor:
             manager = CertificateManager(self.config)
 
             for item in work_items:
+                # Check shutdown BEFORE starting each item
                 if self._shutdown_event.is_set():
                     logger.info(f"Skipping {item.task_key} due to shutdown request")
                     self.progress.update(item.task_key, TaskStatus.CANCELLED)
                     continue
 
                 self.progress.update(item.task_key, TaskStatus.RUNNING)
+                logger.info(
+                    f"▶ Starting: {item.domain_config.primary_domain} [{item.key_type}]"
+                )
                 self._log_progress()
 
                 try:
@@ -342,17 +424,35 @@ class CertificateExecutor:
 
                     if result.success:
                         self.progress.update(item.task_key, TaskStatus.SUCCESS)
+                        if result.renewed:
+                            logger.success(
+                                f"✓ Renewed: {item.domain_config.primary_domain} [{item.key_type}]"
+                            )
+                        else:
+                            logger.info(
+                                f"✓ Valid: {item.domain_config.primary_domain} [{item.key_type}] (skipped)"
+                            )
                     else:
                         self.progress.update(
                             item.task_key,
                             TaskStatus.FAILED,
                             result.error_message or "Unknown error",
                         )
+                        logger.error(
+                            f"✗ Failed: {item.domain_config.primary_domain} [{item.key_type}] - "
+                            f"{result.error_message or 'Unknown error'}"
+                        )
+
+                    # Check shutdown AFTER completing each item
+                    if self._shutdown_event.is_set():
+                        logger.info("Shutdown requested - stopping batch processing")
+                        break
+
                 except KeyboardInterrupt:
                     # Signal handler should have caught this, but if not,
-                    # set shutdown event and continue to allow graceful cleanup
+                    # set shutdown event and stop immediately
                     logger.warning(
-                        f"Interrupted during {item.task_key}, stopping after current batch"
+                        f"Interrupted during {item.task_key}, stopping immediately"
                     )
                     self._shutdown_event.set()
                     self.progress.update(
@@ -377,7 +477,12 @@ class CertificateExecutor:
         domain_lookup = {d.primary_domain: d for d in domains}
 
         try:
-            with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+            with ProcessPoolExecutor(
+                max_workers=self.max_workers, initializer=_worker_init
+            ) as executor:
+                # Store executor reference for forced shutdown
+                self._executor = executor
+
                 # Submit all tasks with rate limiting
                 future_to_item: dict[Future, WorkItem] = {}
 
@@ -391,6 +496,9 @@ class CertificateExecutor:
                         continue
 
                     self.progress.update(item.task_key, TaskStatus.RUNNING)
+                    logger.info(
+                        f"▶ Starting: {item.domain_config.primary_domain} [{item.key_type}]"
+                    )
 
                     future = executor.submit(
                         _process_certificate_worker,
@@ -401,61 +509,103 @@ class CertificateExecutor:
                     )
                     future_to_item[future] = item
 
-                # Process results as they complete
-                for future in as_completed(future_to_item):
+                # Process results as they complete with periodic progress updates
+                last_progress_time = time.monotonic()
+                progress_interval = 10.0  # Log every 10 seconds if no activity
+                completed_futures = set()
+
+                while len(completed_futures) < len(future_to_item):
                     if self._shutdown_event.is_set():
                         # Cancel remaining futures
                         for f in future_to_item:
                             f.cancel()
                         break
 
-                    item = future_to_item[future]
+                    # Check if we should log periodic progress even without completion
+                    now = time.monotonic()
+                    if now - last_progress_time >= progress_interval:
+                        logger.info("⏳ Still processing certificates...")
+                        self._log_progress()
+                        last_progress_time = now
 
+                    # Wait for next completion with timeout for periodic updates
                     try:
-                        result_dict = future.result(
-                            timeout=300
-                        )  # 5 minute timeout per cert
-                        result = self._dict_to_result(result_dict, domain_lookup)
-                        self._summary.add_result(result)
+                        for future in as_completed(future_to_item, timeout=1.0):
+                            if future in completed_futures:
+                                continue
+                            completed_futures.add(future)
 
-                        if result.success:
-                            self.progress.update(item.task_key, TaskStatus.SUCCESS)
-                        else:
-                            self.progress.update(
-                                item.task_key,
-                                TaskStatus.FAILED,
-                                result.error_message or "Unknown error",
-                            )
+                            item = future_to_item[future]
+                            last_progress_time = (
+                                time.monotonic()
+                            )  # Reset timer on activity
+
+                            try:
+                                result_dict = future.result(timeout=300)
+                                result = self._dict_to_result(
+                                    result_dict, domain_lookup
+                                )
+                                self._summary.add_result(result)
+
+                                if result.success:
+                                    self.progress.update(
+                                        item.task_key, TaskStatus.SUCCESS
+                                    )
+                                    if result.renewed:
+                                        logger.success(
+                                            f"✓ Renewed: {item.domain_config.primary_domain} [{item.key_type}]"
+                                        )
+                                    else:
+                                        logger.info(
+                                            f"✓ Valid: {item.domain_config.primary_domain} [{item.key_type}] (skipped)"
+                                        )
+                                else:
+                                    self.progress.update(
+                                        item.task_key,
+                                        TaskStatus.FAILED,
+                                        result.error_message or "Unknown error",
+                                    )
+                                    logger.error(
+                                        f"✗ Failed: {item.domain_config.primary_domain} [{item.key_type}] - "
+                                        f"{result.error_message or 'Unknown error'}"
+                                    )
+                            except TimeoutError:
+                                logger.error(f"Timeout processing {item.task_key}")
+                                self.progress.update(
+                                    item.task_key, TaskStatus.FAILED, "Timeout"
+                                )
+                                self._summary.add_result(
+                                    CertificateResult(
+                                        domain_config=item.domain_config,
+                                        key_type=item.key_type,
+                                        success=False,
+                                        renewed=True,
+                                        error_message="Processing timeout",
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Error processing {item.task_key}: {e}")
+                                self.progress.update(
+                                    item.task_key, TaskStatus.FAILED, str(e)
+                                )
+                                self._summary.add_result(
+                                    CertificateResult(
+                                        domain_config=item.domain_config,
+                                        key_type=item.key_type,
+                                        success=False,
+                                        renewed=True,
+                                        error_message=f"Executor error: {e}",
+                                    )
+                                )
+
+                            self._log_progress()
+                            break  # Process one future at a time
                     except TimeoutError:
-                        logger.error(f"Timeout processing {item.task_key}")
-                        self.progress.update(
-                            item.task_key, TaskStatus.FAILED, "Timeout"
-                        )
-                        self._summary.add_result(
-                            CertificateResult(
-                                domain_config=item.domain_config,
-                                key_type=item.key_type,
-                                success=False,
-                                renewed=True,
-                                error_message="Processing timeout",
-                            )
-                        )
-                    except Exception as e:
-                        logger.error(f"Error processing {item.task_key}: {e}")
-                        self.progress.update(item.task_key, TaskStatus.FAILED, str(e))
-                        self._summary.add_result(
-                            CertificateResult(
-                                domain_config=item.domain_config,
-                                key_type=item.key_type,
-                                success=False,
-                                renewed=True,
-                                error_message=f"Executor error: {e}",
-                            )
-                        )
-
-                    self._log_progress()
+                        # No futures completed in this interval, continue waiting
+                        pass
 
         finally:
+            self._executor = None  # Clear executor reference
             self._restore_signal_handlers()
 
         return self._summary

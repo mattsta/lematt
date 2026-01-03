@@ -24,8 +24,8 @@ classifiers = [
 
 # Required dependencies (tomllib is stdlib in Python 3.11+)
 dependencies = [
-    "loguru>=0.7",  # Modern structured logging
-    "rich>=13.0",   # Beautiful terminal output, tables, progress bars
+    "loguru>=0.7", # Modern structured logging
+    "rich>=13.0", # Beautiful terminal output, tables, progress bars
 ]
 
 [project.optional-dependencies]

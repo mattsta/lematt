@@ -737,7 +737,6 @@ def main() -> int:
             rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
             curve_tag=config.get("curveTag", curve),
             is_test=args.is_test,
-            domains=domains,
         )
 
         health_checker = HealthChecker(
@@ -754,6 +753,7 @@ def main() -> int:
         dashboard = Dashboard(
             config=dashboard_config,
             health_checker=health_checker,
+            domains=domains,
         )
 
         logger.info("Launching interactive dashboard...")

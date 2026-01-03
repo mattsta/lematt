@@ -39,16 +39,16 @@ def setup_logging(
     else:
         level = "INFO"
 
-    # Build format string
+    # Build format string with timestamps
     if cron:
         # Simpler format for cron logs
         fmt = "{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {message}"
     else:
-        # Interactive format with colors
+        # Interactive format with timestamps and colors
         if test_mode:
-            fmt = "<yellow>[TEST]</yellow> <level>{message}</level>"
+            fmt = "<green>{time:HH:mm:ss}</green> <yellow>[TEST]</yellow> <level>{message}</level>"
         else:
-            fmt = "<level>{message}</level>"
+            fmt = "<green>{time:HH:mm:ss}</green> <level>{message}</level>"
 
     # Add console handler
     logger.add(
