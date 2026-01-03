@@ -136,6 +136,7 @@ class LemattDashboardApp(App[None]):
             header = self.screen.query_one("#header")
             header.last_update = self.last_update
             header.error_message = self.error_message
+            header.is_test = self.health_checker.config.is_test
 
             # Update sidebar
             sidebar = self.screen.query_one("#sidebar")

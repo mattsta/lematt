@@ -12,6 +12,7 @@ class DashboardHeader(Static):
 
     Displays:
     - Application title
+    - TEST MODE warning (if applicable)
     - Status badge (LIVE/PAUSED/ERROR)
     - Last update timestamp
     """
@@ -19,10 +20,16 @@ class DashboardHeader(Static):
     is_paused: reactive[bool] = reactive(False)
     error_message: reactive[str | None] = reactive(None)
     last_update: reactive[datetime | None] = reactive(None)
+    is_test: reactive[bool] = reactive(False)
 
     def render(self) -> Text:
         """Render the header with status badge and timestamp."""
-        title = Text("Lematt Certificate Dashboard", style="bold cyan")
+        # Add TEST MODE warning if applicable
+        if self.is_test:
+            title = Text("⚠ TEST MODE ⚠ ", style="bold red")
+            title.append("Lematt Certificate Dashboard", style="bold cyan")
+        else:
+            title = Text("Lematt Certificate Dashboard", style="bold cyan")
 
         # Status badge
         if self.error_message:

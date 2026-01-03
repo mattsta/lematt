@@ -177,17 +177,25 @@ class ReportRenderer:
         self.display_config = display_config or DisplayConfig()
 
     def render_inventory_table(
-        self, inventory: list[CertificateInventoryItem], show_paths: bool = True
+        self,
+        inventory: list[CertificateInventoryItem],
+        show_paths: bool = True,
+        is_test: bool = False,
     ) -> Table:
         """Render certificate inventory as a table."""
+        title = "Certificate Inventory"
+        if is_test:
+            title = "[red]Certificate Inventory (TEST MODE)[/red]"
+
         table = Table(
-            title="Certificate Inventory",
+            title=title,
             show_header=True,
             header_style="bold cyan",
             border_style="bright_black",
             expand=True,
         )
 
+        table.add_column("Mode", justify="center", width=8, style="bold")
         table.add_column("Domain", style="bold")
         table.add_column("Type", justify="center", width=6)
         table.add_column("Status", justify="center", width=10)
@@ -224,8 +232,16 @@ class ReportRenderer:
             san_count = len(item.san_domains)
             san_text = str(san_count) if san_count > 0 else "-"
 
+            # Mode indicator
+            mode_text = (
+                Text("[TEST]", style="bold red")
+                if is_test
+                else Text("[PROD]", style="bold green")
+            )
+
             if show_paths:
                 table.add_row(
+                    mode_text,
                     item.domain,
                     item.key_type.upper(),
                     status_text,
@@ -236,6 +252,7 @@ class ReportRenderer:
                 )
             else:
                 table.add_row(
+                    mode_text,
                     item.domain,
                     item.key_type.upper(),
                     status_text,
@@ -246,16 +263,23 @@ class ReportRenderer:
 
         return table
 
-    def render_schedule_table(self, schedule: list[RenewalScheduleItem]) -> Table:
+    def render_schedule_table(
+        self, schedule: list[RenewalScheduleItem], is_test: bool = False
+    ) -> Table:
         """Render renewal schedule as a table."""
+        title = "Renewal Schedule"
+        if is_test:
+            title = "[red]Renewal Schedule (TEST MODE)[/red]"
+
         table = Table(
-            title="Renewal Schedule",
+            title=title,
             show_header=True,
             header_style="bold cyan",
             border_style="bright_black",
             expand=True,
         )
 
+        table.add_column("Mode", justify="center", width=8, style="bold")
         table.add_column("Priority", justify="center", width=12)
         table.add_column("Domain", style="bold")
         table.add_column("Type", justify="center", width=6)
@@ -293,7 +317,15 @@ class ReportRenderer:
             else:
                 days_text = Text("-", style=StatusStyle.MUTED)
 
+            # Mode indicator
+            mode_text = (
+                Text("[TEST]", style="bold red")
+                if is_test
+                else Text("[PROD]", style="bold green")
+            )
+
             table.add_row(
+                mode_text,
                 priority_text,
                 item.domain,
                 item.key_type.upper(),
@@ -346,9 +378,10 @@ class ReportRenderer:
                     parts.append("upload")
                 if action.update_commands:
                     parts.append("update")
-                action_text.append(
-                    ", ".join(parts) if parts else "[dim]no commands[/dim]"
-                )
+                if parts:
+                    action_text.append(", ".join(parts))
+                else:
+                    action_text.append("no commands", style="dim")
                 actions_node.add(action_text)
 
         return Panel(tree, border_style="cyan")
@@ -453,14 +486,25 @@ class Report:
 
         sections: list[Any] = []
 
-        # Header
-        header = Panel(
-            Text.from_markup(
-                f"[bold cyan]{self.report_config.title}[/bold cyan]\n"
-                f"[dim]Generated: {self.report_config.generated_at.strftime('%Y-%m-%d %H:%M:%S')}[/dim]"
-            ),
-            border_style="cyan",
-        )
+        # Header with TEST MODE warning if applicable
+        if self.config.is_test:
+            header = Panel(
+                Text.from_markup(
+                    f"[bold red]⚠ TEST MODE - STAGING CERTIFICATES ONLY ⚠[/bold red]\n"
+                    f"[bold cyan]{self.report_config.title}[/bold cyan]\n"
+                    f"[dim]Generated: {self.report_config.generated_at.strftime('%Y-%m-%d %H:%M:%S')}[/dim]"
+                ),
+                border_style="red",
+                style="on red",
+            )
+        else:
+            header = Panel(
+                Text.from_markup(
+                    f"[bold cyan]{self.report_config.title}[/bold cyan]\n"
+                    f"[dim]Generated: {self.report_config.generated_at.strftime('%Y-%m-%d %H:%M:%S')}[/dim]"
+                ),
+                border_style="cyan",
+            )
         sections.append(header)
         sections.append(Text())
 
@@ -474,7 +518,9 @@ class Report:
             inventory = self.generator.build_inventory()
             sections.append(
                 self.renderer.render_inventory_table(
-                    inventory, show_paths=self.report_config.show_paths
+                    inventory,
+                    show_paths=self.report_config.show_paths,
+                    is_test=self.config.is_test,
                 )
             )
             sections.append(Text())
@@ -482,7 +528,11 @@ class Report:
         # Renewal schedule
         if self.report_config.include_schedule:
             schedule = self.generator.build_renewal_schedule()
-            sections.append(self.renderer.render_schedule_table(schedule))
+            sections.append(
+                self.renderer.render_schedule_table(
+                    schedule, is_test=self.config.is_test
+                )
+            )
             sections.append(Text())
 
         # Configuration summary
