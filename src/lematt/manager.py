@@ -46,11 +46,17 @@ class PrepareActionRunner:
 
     config: LemattConfig
     _processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
+    _domain_lock: object = field(default=None, repr=False)  # multiprocessing.Lock
+    _locked_domain: str | None = field(default=None, repr=False)
 
     def prepare_domain(
         self, domain: str, domain_actions: DomainActions
     ) -> list[subprocess.Popen]:
         """Run prepare actions for a domain before cert request.
+
+        CRITICAL: This method acquires a domain-level lock to ensure only ONE
+        prepare action runs per domain at a time. This prevents port conflicts
+        when processing multiple key types (RSA + EC) in parallel.
 
         Args:
             domain: The domain to prepare.
@@ -59,6 +65,24 @@ class PrepareActionRunner:
         Returns:
             List of running Popen processes that must be killed after cert request.
         """
+        # Acquire domain lock to serialize prepare actions per domain
+        # This prevents "port already in use" errors when running parallel renewals
+        from lematt.executor import _get_domain_lock
+
+        try:
+            self._domain_lock = _get_domain_lock(domain)
+            self._locked_domain = domain
+            logger.debug(f"[PREPARE] Acquiring lock for domain: {domain}")
+            self._domain_lock.acquire()  # type: ignore[union-attr]
+            logger.info(f"[PREPARE] Lock acquired for domain: {domain}")
+        except (RuntimeError, AttributeError):
+            # Lock manager not initialized (sequential mode)
+            self._domain_lock = None
+            self._locked_domain = None
+            logger.debug(
+                f"[PREPARE] No lock needed for domain: {domain} (sequential mode)"
+            )
+
         processes: list[subprocess.Popen] = []
 
         # Get actions for this domain (or default)
@@ -75,7 +99,8 @@ class PrepareActionRunner:
                 else:
                     logger.info(f"[PREPARE] Starting: {cmd}")
                     try:
-                        proc = subprocess.Popen(cmd, shell=True)
+                        # Use start_new_session to create process group for proper cleanup
+                        proc = subprocess.Popen(cmd, shell=True, start_new_session=True)
                         processes.append(proc)
                     except OSError as e:
                         logger.error(f"[PREPARE] Failed to start: {cmd} - {e}")
@@ -92,22 +117,69 @@ class PrepareActionRunner:
         Args:
             processes: Specific processes to kill. If None, kills all tracked processes.
         """
+        import os
+        import signal
+
         procs = processes if processes is not None else self._processes
 
         if not procs:
             return
 
+        logger.debug(f"[PREPARE] Cleaning up {len(procs)} prepare process(es)")
+        killed_count = 0
         for proc in procs:
             try:
-                proc.terminate()
-                # Give process a moment to terminate gracefully
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-            except OSError:
+                # Kill entire process group (handles shell=True and child processes)
+                if proc.poll() is None:  # Process still running
+                    try:
+                        # Send SIGTERM to process group
+                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                        # Wait for graceful termination
+                        try:
+                            proc.wait(timeout=2)
+                            killed_count += 1
+                            logger.debug(
+                                f"[PREPARE] Terminated process group for PID {proc.pid}"
+                            )
+                        except subprocess.TimeoutExpired:
+                            # Force kill the process group
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                            proc.wait()
+                            killed_count += 1
+                            logger.debug(
+                                f"[PREPARE] Force killed process group for PID {proc.pid}"
+                            )
+                    except (OSError, ProcessLookupError):
+                        # Process group doesn't exist, try killing just the process
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=2)
+                            killed_count += 1
+                            logger.debug(f"[PREPARE] Terminated process PID {proc.pid}")
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait()
+                            killed_count += 1
+                            logger.debug(
+                                f"[PREPARE] Force killed process PID {proc.pid}"
+                            )
+            except (OSError, ProcessLookupError):
                 pass  # Process may have already exited
+
+        if killed_count > 0:
+            logger.info(f"[PREPARE] Cleaned up {killed_count} prepare process(es)")
+
+        # Release domain lock if we acquired it
+        if self._domain_lock is not None:
+            try:
+                self._domain_lock.release()  # type: ignore[union-attr,attr-defined]
+                logger.info(
+                    f"[PREPARE] Released lock for domain: {self._locked_domain}"
+                )
+                self._domain_lock = None
+                self._locked_domain = None
+            except Exception as e:
+                logger.warning(f"[PREPARE] Error releasing domain lock: {e}")
 
         # Reset terminal if any prepare commands were run
         with contextlib.suppress(subprocess.CalledProcessError, OSError):
@@ -391,16 +463,71 @@ subjectAltName={san_config}"""
                 os.unlink(temp_link)
             return False
 
+    def process_domain_all_keys(
+        self,
+        domain_config: DomainConfig,
+        domain_actions: DomainActions,
+        key_types: list[KeyType] | None = None,
+    ) -> list[CertificateResult]:
+        """Process a domain with ALL key types, running prepare ONCE.
+
+        This prevents "port already in use" errors by running prepare scripts
+        once and keeping them alive for the entire domain processing.
+
+        Args:
+            domain_config: The domain configuration.
+            domain_actions: DomainActions container with action configs.
+            key_types: List of key types to process (defaults to [RSA, EC]).
+
+        Returns:
+            List of CertificateResult for each key type processed.
+        """
+        if key_types is None:
+            key_types = [KeyType.RSA, KeyType.EC]
+
+        results: list[CertificateResult] = []
+
+        # Run prepare actions ONCE before processing any key types
+        prepare_runner = PrepareActionRunner(self.config)
+        prepared_processes: list[subprocess.Popen] = []
+
+        try:
+            # Prepare all domains on this certificate
+            for domain in domain_config.all_domains:
+                procs = prepare_runner.prepare_domain(domain, domain_actions)
+                prepared_processes.extend(procs)
+
+            # Process ALL key types with prepare processes still running
+            for key_type in key_types:
+                result = self.process_domain(
+                    domain_config,
+                    key_type,
+                    domain_actions,
+                    skip_prepare=True,
+                    prepare_processes=prepared_processes,
+                )
+                results.append(result)
+
+        finally:
+            # Cleanup prepare processes after ALL key types are done
+            prepare_runner.cleanup(prepared_processes)
+
+        return results
+
     def process_domain(
         self,
         domain_config: DomainConfig,
         key_type: KeyType,
         domain_actions: DomainActions,
+        skip_prepare: bool = False,
+        prepare_processes: list[subprocess.Popen] | None = None,
     ) -> CertificateResult:
         """Process a single domain for certificate renewal.
 
         Args:
             domain_config: The domain configuration.
+            skip_prepare: If True, skip running prepare actions (caller manages them).
+            prepare_processes: Existing prepare processes to reuse (if skip_prepare=True).
             key_type: Type of key (RSA or EC).
             domain_actions: DomainActions container with action configs.
 
@@ -498,25 +625,32 @@ subjectAltName={san_config}"""
                     error_message="CSR generation failed",
                 )
 
-        # Run prepare actions before certificate request
+        # Run prepare actions before certificate request (unless skipped)
         # (e.g., start temporary web server, open firewall ports)
-        prepare_runner = PrepareActionRunner(self.config)
-        prepared_processes: list[subprocess.Popen] = []
-
-        try:
-            # Prepare all domains on this certificate
-            for domain in domain_config.all_domains:
-                procs = prepare_runner.prepare_domain(domain, domain_actions)
-                prepared_processes.extend(procs)
-
-            # Request certificate (prepare processes kept alive during ACME challenge)
-            domain_context = f"{domain_config.primary_domain}[{key_type}]"
+        if skip_prepare:
+            # Caller manages prepare processes - just use them
             cert_success = self.request_certificate(
-                csr, cert, domain_context=domain_context
+                csr, cert, domain_context=f"{domain_config.primary_domain}[{key_type}]"
             )
-        finally:
-            # Always cleanup prepare processes, regardless of cert success
-            prepare_runner.cleanup(prepared_processes)
+        else:
+            # This cert manages its own prepare/cleanup cycle
+            prepare_runner = PrepareActionRunner(self.config)
+            prepared_processes: list[subprocess.Popen] = []
+
+            try:
+                # Prepare all domains on this certificate
+                for domain in domain_config.all_domains:
+                    procs = prepare_runner.prepare_domain(domain, domain_actions)
+                    prepared_processes.extend(procs)
+
+                # Request certificate (prepare processes kept alive during ACME challenge)
+                domain_context = f"{domain_config.primary_domain}[{key_type}]"
+                cert_success = self.request_certificate(
+                    csr, cert, domain_context=domain_context
+                )
+            finally:
+                # Always cleanup prepare processes, regardless of cert success
+                prepare_runner.cleanup(prepared_processes)
 
         if not cert_success:
             self.log(
