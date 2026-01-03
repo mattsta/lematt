@@ -1,0 +1,174 @@
+/* Textual CSS - ALL EXPLICIT COLORS, NO THEME VARIABLES */
+
+/* Header styling */
+DashboardHeader {
+    height: 3;
+    content-align: center middle;
+    background: #1a1a1a;
+    color: #ffffff;
+    border-bottom: solid #444444;
+}
+
+/* Footer styling */
+KeybindingsFooter {
+    height: 3;
+    content-align: center middle;
+    background: #1a1a1a;
+    color: #ffffff;
+    border-top: solid #444444;
+}
+
+/* Sidebar styling */
+StatusSidebar {
+    width: 30;
+    background: #0d0d0d;
+    color: #ffffff;
+}
+
+/* Body container */
+#body {
+    height: 1fr;
+}
+
+#content {
+    padding: 1 2;
+}
+
+/* Overview panel */
+OverviewPanel {
+    height: 1fr;
+}
+
+OverviewPanel Vertical {
+    height: auto;
+}
+
+/* Certificate table */
+CertificateTable {
+    height: 1fr;
+}
+
+CertificateTable DataTable {
+    height: 1fr;
+}
+
+CertificateTable DataTable > .datatable--header {
+    background: #2a2a2a;
+    color: #ffffff;
+    text-style: bold;
+}
+
+CertificateTable DataTable > .datatable--cursor {
+    background: #444444;
+    color: #ffffff;
+}
+
+/* Health table */
+HealthTable {
+    height: 1fr;
+}
+
+HealthTable > .datatable--header {
+    background: #2a2a2a;
+    color: #ffffff;
+    text-style: bold;
+}
+
+HealthTable > .datatable--cursor {
+    background: #444444;
+    color: #ffffff;
+}
+
+/* Log viewer */
+LogViewer {
+    height: 1fr;
+    border: solid #444444;
+    background: #0d0d0d;
+    color: #ffffff;
+}
+
+/* Certificate Detail Screen - Full Screen */
+CertificateDetailScreen {
+    layout: vertical;
+    background: #000000;
+}
+
+#detail-header {
+    height: 3;
+    background: #1a1a1a;
+    content-align: center middle;
+    text-style: bold;
+    color: #ffffff;
+}
+
+#detail-container {
+    width: 100%;
+    height: 1fr;
+    padding: 2 4;
+    background: #000000;
+    color: #ffffff;
+}
+
+#footer-text {
+    height: 1;
+    content-align: center middle;
+    color: #ffffff;
+    text-style: bold;
+    background: #000000;
+}
+
+/* Filter Dialog - Modal */
+FilterDialogScreen {
+    align: center middle;
+}
+
+#filter-container {
+    background: #1a1a1a;
+    color: #ffffff;
+    border: thick #444444;
+}
+
+/* Buttons */
+Button {
+    margin: 0 1;
+    background: #2a2a2a;
+    color: #ffffff;
+    border: solid #555555;
+}
+
+Button:hover {
+    background: #444444;
+    color: #ffffff;
+}
+
+Button:focus {
+    background: #555555;
+    color: #ffffff;
+}
+
+/* Radio buttons */
+RadioButton {
+    padding: 0 1;
+    color: #ffffff;
+}
+
+RadioButton:focus {
+    background: #444444;
+    color: #ffffff;
+}
+
+/* Static text containers */
+Static {
+    height: auto;
+    color: #ffffff;
+}
+
+/* View containers */
+.view-container {
+    display: none;
+    height: 1fr;
+}
+
+.view-container.current {
+    display: block;
+}
