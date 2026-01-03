@@ -212,6 +212,7 @@ class CertificateManager:
         csr_path: str,
         output_path: str,
         max_retries: int = 3,
+        domain_context: str = "",
     ) -> bool:
         """Request a signed certificate from Let's Encrypt.
 
@@ -219,6 +220,7 @@ class CertificateManager:
             csr_path: Path to the CSR file.
             output_path: Path to write the signed certificate.
             max_retries: Maximum number of retry attempts.
+            domain_context: Domain context for logging (e.g., "example.com[rsa]").
 
         Returns:
             True if successful, False otherwise.
@@ -233,6 +235,7 @@ class CertificateManager:
                     csr_path,
                     self.config.challenge_dir,
                     directory_url=directory,
+                    domain_context=domain_context,
                 )
                 with open(output_path, "w") as f:
                     f.write(signed_cert)
@@ -507,7 +510,10 @@ subjectAltName={san_config}"""
                 prepared_processes.extend(procs)
 
             # Request certificate (prepare processes kept alive during ACME challenge)
-            cert_success = self.request_certificate(csr, cert)
+            domain_context = f"{domain_config.primary_domain}[{key_type}]"
+            cert_success = self.request_certificate(
+                csr, cert, domain_context=domain_context
+            )
         finally:
             # Always cleanup prepare processes, regardless of cert success
             prepare_runner.cleanup(prepared_processes)

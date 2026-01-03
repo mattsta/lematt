@@ -374,6 +374,7 @@ class Dashboard:
     config: DashboardConfig = field(default_factory=DashboardConfig)
     health_checker: HealthChecker | None = None
     data_provider: Callable[[], dict] | None = None
+    domains: list = field(default_factory=list)
 
     _state: DashboardState = field(default_factory=DashboardState, init=False)
     _renderer: DashboardRenderer | None = field(default=None, init=False)
@@ -388,12 +389,11 @@ class Dashboard:
         self._state.add_log("Refreshing data...")
 
         try:
-            if self.health_checker:
-                # Get health data
-                domains = self.health_checker.config.domains
-                key_types = [str(kt) for kt in self.health_checker.config.key_types]
+            if self.health_checker and self.domains:
+                # Get health data using stored domains and default key types
+                key_types = ["rsa", "ec"]
                 self._state.health_data = self.health_checker.check_all_certificates(
-                    domains, key_types
+                    self.domains, key_types
                 )
 
                 # Convert to certificate dicts for display
