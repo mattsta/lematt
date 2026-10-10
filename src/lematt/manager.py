@@ -8,7 +8,9 @@ import contextlib
 import datetime
 import os
 import pathlib
+import shlex
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Iterable
@@ -58,6 +60,34 @@ from lematt.state import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+_warned_ssh_commands: set[str] = set()
+
+
+def warn_if_ssh_lacks_forced_tty(command: str) -> None:
+    """Warn (once per command) about `ssh -t` in prepare actions without a tty.
+
+    Without a local terminal (cron, systemd), a single `-t` doesn't allocate
+    a pseudo-terminal ("Pseudo-terminal will not be allocated..."), so the
+    remote command (e.g. contrib/leforward.py) can outlive the ssh session
+    and keep its port bound. `-tt` forces one.
+    """
+    if command in _warned_ssh_commands or sys.stdin.isatty():
+        return
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return
+    if not any(os.path.basename(t) == "ssh" for t in tokens):
+        return
+    if "-t" in tokens and "-tt" not in tokens and tokens.count("-t") == 1:
+        _warned_ssh_commands.add(command)
+        logger.warning(
+            f"[PREPARE] {command!r} uses 'ssh -t', which can't allocate a "
+            "pseudo-terminal without one here, so the remote command may keep "
+            "running after the run; use 'ssh -tt'"
+        )
 
 
 @dataclass
@@ -170,6 +200,7 @@ class PrepareActionRunner:
                     logger.info(f"[DRY-RUN] Would run prepare: {cmd}")
                 else:
                     logger.info(f"[PREPARE] Starting: {cmd}")
+                    warn_if_ssh_lacks_forced_tty(cmd)
                     try:
                         # Use start_new_session to create process group for proper cleanup
                         proc = subprocess.Popen(cmd, shell=True, start_new_session=True)

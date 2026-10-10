@@ -95,6 +95,10 @@ lematt now keeps state between runs.
 
 ### Fixed
 
+- Example and help `prepare` commands used `ssh -t`, which allocates no
+  pseudo-terminal when lematt runs without one (cron, systemd), so a remote
+  challenge forwarder could keep running after the run. They now use `ssh -tt`,
+  and lematt warns about `ssh -t` prepare commands when it has no terminal.
 - Production systemd units failed every run (missing `--prod`).
 - Regenerated keys could keep trailing bytes of the old key (no truncation).
 - A failed renewal with `alwaysGenerateNewKeys` left a new key next to the old

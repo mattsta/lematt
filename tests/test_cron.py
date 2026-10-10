@@ -169,3 +169,24 @@ def test_test_mode_tag_appears_once(tmp_path, capsys, cron):
     line = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().err).strip()
     assert line.count("[TEST]") == 1
     assert line.endswith("> [rsa] Renewing example.com!")
+
+
+def test_prepare_warns_about_ssh_without_forced_tty(monkeypatch, capsys):
+    from lematt import manager
+
+    setup_logging()
+    monkeypatch.setattr(manager.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(manager, "_warned_ssh_commands", set())
+
+    for command in (
+        "ssh -t forwarder.example.net http://example.com",
+        "ssh -t forwarder.example.net http://example.com",  # warned once
+        "ssh -tt forwarder.example.net http://example.com",
+        "ssh forwarder.example.net start",
+        "/usr/local/bin/forwarder -t 5",
+    ):
+        manager.warn_if_ssh_lacks_forced_tty(command)
+
+    err = capsys.readouterr().err
+    assert err.count("use 'ssh -tt'") == 1
+    assert "ssh -t forwarder.example.net" in err

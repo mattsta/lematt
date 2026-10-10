@@ -427,7 +427,7 @@ uploadCerts: ["rsync -avz CERTS backup:/srv/tls/"]
 
 [override-mail]
 domains: mail.example.com
-prepare: ["ssh -t mail-forward http://example.com"]
+prepare: ["ssh -tt mail-forward http://example.com"]
 update: ["ssh mail-reload-postfix"]
 ```
 """,

@@ -61,10 +61,11 @@ if __name__ == "__main__":
 
     serverAddress = ("", 80)
 
-    # Note: if running remotely by an SSH command, you MUST launch with '-t':
-    #   > ssh -t me@otherhost leforward.py --baseurl http://otherserver.com
-    # If you omit '-t' the listening server won't terminate when you kill the
-    # ssh session, which probably isn't what you want.
+    # Note: if running remotely by an SSH command, you MUST launch with '-tt':
+    #   > ssh -tt me@otherhost leforward.py --baseurl http://otherserver.com
+    # Without a pseudo-terminal the listening server won't terminate when the
+    # ssh session is killed. A single '-t' only allocates one when ssh itself
+    # runs in a terminal; '-tt' forces it (needed under cron or systemd).
     with ReusableServer(serverAddress, RedirectChallenges) as httpd:
         httpd.serve_forever()
 
