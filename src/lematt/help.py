@@ -208,6 +208,8 @@ healthy, warning, critical or unknown, with an exit code for monitoring.
 - 0: All healthy
 - 1: At least one warning
 - 2: At least one critical
+- 3: Unknown: a certificate doesn't parse, a live check couldn't connect,
+  or the configuration doesn't load (warning and critical take precedence)
 """,
         examples=[
             "uv run lematt --prod --health-check",
@@ -540,7 +542,7 @@ Metrics:
 
 ## Nagios/Icinga
 
-`--health-check` exits 0 (OK), 1 (WARNING) or 2 (CRITICAL).
+`--health-check` exits 0 (OK), 1 (WARNING), 2 (CRITICAL) or 3 (UNKNOWN).
 
 ## JSON
 

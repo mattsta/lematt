@@ -137,3 +137,10 @@ def test_test_notification_needs_no_challenge_directory(monkeypatch, conf):
     )
 
     assert run(monkeypatch, conf, "--test-notification") == 0
+
+
+def test_health_check_without_a_usable_config_is_unknown(tmp_path):
+    missing = tmp_path / "missing" / "lematt.conf"
+
+    assert main(["--test", "--config", str(missing), "--health-check"]) == 3
+    assert main(["--test", "--config", str(missing), "--status"]) == 1

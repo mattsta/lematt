@@ -10,7 +10,13 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
 
 from lematt.config import DomainConfig, KeyType, LemattConfig
-from lematt.health import HealthChecker, HealthStatus, PrometheusMetrics
+from lematt.health import (
+    CertificateHealth,
+    HealthChecker,
+    HealthStatus,
+    PrometheusMetrics,
+    SystemHealth,
+)
 from lematt.state import AttemptState, CertState, StateStore
 
 DOMAIN = DomainConfig("example.com")
@@ -144,3 +150,50 @@ def test_report_schedule_uses_the_renewal_policy(config):
     due = NOW + datetime.timedelta(days=40 - 15)  # 1/3 of 45 days before expiry
     assert {item.renewal_date for item in schedule} == {due}
     assert {item.priority for item in schedule} == {"ok"}
+
+
+def result(status: HealthStatus, key_type: str = "rsa") -> CertificateHealth:
+    return CertificateHealth("example.com", key_type, status, str(status))
+
+
+@pytest.mark.parametrize(
+    ("statuses", "overall", "exit_code", "summary"),
+    [
+        ([], HealthStatus.HEALTHY, 0, "Certificates: 0 healthy"),
+        ([HealthStatus.HEALTHY], HealthStatus.HEALTHY, 0, "Certificates: 1 healthy"),
+        (
+            [HealthStatus.HEALTHY, HealthStatus.UNKNOWN],
+            HealthStatus.UNKNOWN,
+            3,
+            "Certificates: 1 unknown, 1 healthy",
+        ),
+        (
+            [HealthStatus.UNKNOWN, HealthStatus.WARNING],
+            HealthStatus.WARNING,
+            1,
+            "Certificates: 1 warning, 1 unknown, 0 healthy",
+        ),
+        (
+            [HealthStatus.WARNING, HealthStatus.CRITICAL, HealthStatus.HEALTHY],
+            HealthStatus.CRITICAL,
+            2,
+            "Certificates: 1 critical, 1 warning, 1 healthy",
+        ),
+    ],
+)
+def test_overall_health_is_the_worst_result(statuses, overall, exit_code, summary):
+    health = SystemHealth.of([result(s) for s in statuses])
+
+    assert health.status == overall
+    assert health.exit_code == exit_code
+    assert health.summary == summary
+
+
+def test_live_results_update_status_and_summary():
+    health = SystemHealth.of([result(HealthStatus.UNKNOWN)])
+
+    health.extend([result(HealthStatus.WARNING, "live")])
+
+    assert health.status == HealthStatus.WARNING
+    assert health.summary == "Certificates: 1 warning, 1 unknown, 0 healthy"
+    assert len(health.certificates) == 2

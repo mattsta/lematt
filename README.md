@@ -756,9 +756,12 @@ probably wasn't deployed).
 `--write-health PATH` also writes the result to a file: Prometheus format
 with `--prometheus`, JSON otherwise.
 
-**Exit codes:** 0 healthy (or only unknown), 1 warning or configuration
-error, 2 critical. Output goes to stderr; `--json` and `--prometheus`
-output goes to stdout.
+**Exit codes** follow the monitoring-plugin convention: 0 healthy, 1
+warning, 2 critical, 3 unknown (a certificate that doesn't parse, a live
+check that couldn't connect, or a configuration that doesn't load). The
+overall status is the worst result, with warning and critical outranking
+unknown. Output goes to stderr; `--json` and `--prometheus` output goes
+to stdout.
 
 ### JSON
 
@@ -822,7 +825,7 @@ Live checks use `key_type="live"`. Alert on
 ```
 
 For Nagios/Icinga, run the same command without `--prometheus`; exit codes
-0, 1 and 2 map to OK, WARNING and CRITICAL.
+0, 1, 2 and 3 map to OK, WARNING, CRITICAL and UNKNOWN.
 
 ---
 

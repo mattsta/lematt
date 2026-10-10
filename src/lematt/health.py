@@ -45,6 +45,23 @@ class HealthStatus(Enum):
         return self.name.lower()
 
 
+# Overall health is the worst result; a definite problem outranks "unknown"
+_SEVERITY = {
+    HealthStatus.HEALTHY: 0,
+    HealthStatus.UNKNOWN: 1,
+    HealthStatus.WARNING: 2,
+    HealthStatus.CRITICAL: 3,
+}
+
+# Nagios/monitoring-plugin convention
+_EXIT_CODES = {
+    HealthStatus.HEALTHY: 0,
+    HealthStatus.WARNING: 1,
+    HealthStatus.CRITICAL: 2,
+    HealthStatus.UNKNOWN: 3,
+}
+
+
 @dataclass
 class CertificateHealth:
     """Health status for a single certificate."""
@@ -96,6 +113,38 @@ class SystemHealth:
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
     summary: str = ""
+
+    @classmethod
+    def of(cls, certificates: list[CertificateHealth]) -> SystemHealth:
+        """Overall health of these results: the worst status, and a summary."""
+        health = cls(status=HealthStatus.HEALTHY, certificates=[])
+        health.extend(certificates)
+        return health
+
+    def extend(self, certificates: list[CertificateHealth]) -> None:
+        """Add results (e.g. live checks), updating the status and summary."""
+        self.certificates.extend(certificates)
+        self.status = max(
+            (c.status for c in self.certificates),
+            key=_SEVERITY.__getitem__,
+            default=HealthStatus.HEALTHY,
+        )
+        parts = [
+            f"{count} {label}"
+            for count, label in (
+                (self.critical_count, "critical"),
+                (self.warning_count, "warning"),
+                (self.unknown_count, "unknown"),
+            )
+            if count
+        ]
+        parts.append(f"{self.healthy_count} healthy")
+        self.summary = f"Certificates: {', '.join(parts)}"
+
+    @property
+    def exit_code(self) -> int:
+        """Monitoring-plugin exit code: 0 OK, 1 warning, 2 critical, 3 unknown."""
+        return _EXIT_CODES[self.status]
 
     @property
     def healthy_count(self) -> int:
@@ -405,7 +454,6 @@ class HealthChecker:
         certificates: list[CertificateHealth] = []
         manager = CertificateManager(self.config)
         now = _utcnow()
-        worst_status = HealthStatus.HEALTHY
 
         for domain_config in domains:
             for key_type in key_types:
@@ -418,42 +466,7 @@ class HealthChecker:
                 )
                 certificates.append(health)
 
-                # Track worst status
-                if health.status == HealthStatus.CRITICAL:
-                    worst_status = HealthStatus.CRITICAL
-                elif (
-                    health.status == HealthStatus.WARNING
-                    and worst_status != HealthStatus.CRITICAL
-                ):
-                    worst_status = HealthStatus.WARNING
-                elif (
-                    health.status == HealthStatus.UNKNOWN
-                    and worst_status == HealthStatus.HEALTHY
-                ):
-                    worst_status = HealthStatus.UNKNOWN
-
-        # Generate summary
-        summary_parts = []
-        healthy = sum(1 for c in certificates if c.status == HealthStatus.HEALTHY)
-        warning = sum(1 for c in certificates if c.status == HealthStatus.WARNING)
-        critical = sum(1 for c in certificates if c.status == HealthStatus.CRITICAL)
-        unknown = sum(1 for c in certificates if c.status == HealthStatus.UNKNOWN)
-
-        if critical > 0:
-            summary_parts.append(f"{critical} critical")
-        if warning > 0:
-            summary_parts.append(f"{warning} warning")
-        if unknown > 0:
-            summary_parts.append(f"{unknown} unknown")
-        summary_parts.append(f"{healthy} healthy")
-
-        summary = f"Certificates: {', '.join(summary_parts)}"
-
-        system_health = SystemHealth(
-            status=worst_status,
-            certificates=certificates,
-            summary=summary,
-        )
+        system_health = SystemHealth.of(certificates)
 
         # Send notifications for issues
         if self.notification_manager:

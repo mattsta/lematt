@@ -42,6 +42,9 @@ from lematt.state import RunLockedError, StateStore, parse_timestamp, utcnow
 # Exit code when another renewal run holds the lock (EX_TEMPFAIL)
 EXIT_RUN_LOCKED = 75
 
+# --health-check exit code when it can't check (monitoring-plugin UNKNOWN)
+EXIT_HEALTH_UNKNOWN = 3
+
 USAGE_EXAMPLES = """\
 examples:
   uv run lematt --test --validate-config      check the configuration
@@ -575,7 +578,7 @@ def cmd_list_domains(ctx: Context) -> int:
 
 
 def cmd_health(ctx: Context) -> int:
-    """--health-check: check certificates; exit 0/1/2 for healthy/warning/critical."""
+    """--health-check: check certificates; exit 0/1/2/3 for healthy/warning/critical/unknown."""
     from lematt.health import (
         HealthChecker,
         HealthStatus,
@@ -594,16 +597,9 @@ def cmd_health(ctx: Context) -> int:
 
     if args.check_live:
         logger.info("Checking live certificates...")
-        for domain_config in ctx.domains:
-            live = checker.check_live_certificate(domain_config.primary_domain)
-            health.certificates.append(live)
-            if live.status == HealthStatus.CRITICAL:
-                health.status = HealthStatus.CRITICAL
-            elif (
-                live.status == HealthStatus.WARNING
-                and health.status == HealthStatus.HEALTHY
-            ):
-                health.status = HealthStatus.WARNING
+        health.extend(
+            [checker.check_live_certificate(d.primary_domain) for d in ctx.domains]
+        )
 
     if args.prometheus_output:
         print(PrometheusMetrics(health).generate())
@@ -630,11 +626,7 @@ def cmd_health(ctx: Context) -> int:
         write_health_status_file(health, health_path, format=fmt)
         logger.info(f"Wrote health status to {health_path}")
 
-    if health.status == HealthStatus.CRITICAL:
-        return 2
-    if health.status == HealthStatus.WARNING:
-        return 1
-    return 0
+    return health.exit_code
 
 
 def cmd_dashboard(ctx: Context) -> int:
@@ -1062,7 +1054,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ctx = load_context(args, require_write_access=not read_only)
     if ctx is None:
-        return 1
+        # Monitoring reads a health check that couldn't run as UNKNOWN, not WARNING
+        return EXIT_HEALTH_UNKNOWN if args.health_check else 1
     return command(ctx)
 
 
