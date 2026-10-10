@@ -24,27 +24,18 @@ classifiers = [
 
 # Required dependencies (tomllib is stdlib in Python 3.11+)
 dependencies = [
-    "loguru>=0.7", # Modern structured logging
-    "rich>=13.0", # Beautiful terminal output, tables, progress bars
-    "textual>=0.47.0", # Interactive TUI framework
+    "loguru>=0.7.3", # Modern structured logging
+    "rich>=15.0", # Beautiful terminal output, tables, progress bars
+    "textual>=8.2", # Interactive TUI framework
 ]
 
 [project.optional-dependencies]
 # Optional: native crypto for ~5x performance improvement
-crypto = ["cryptography>=3.4"]
-
-# Development dependencies
-dev = [
-    "pytest>=7.0",
-    "pytest-cov>=4.0",
-    "pytest-asyncio>=0.23.0", # For async test support
-    "mypy>=1.0",
-    "ruff>=0.1",
-]
+crypto = ["cryptography>=46"]
 
 # Full installation with all features
 full = [
-    "cryptography>=3.4",
+    "cryptography>=46",
 ]
 
 [project.scripts]
@@ -94,6 +85,9 @@ addopts = "-v --tb=short"
 
 [dependency-groups]
 dev = [
-    "mypy>=1.18.2",
-    "types-cryptography>=3.3.23.2",
+    "pytest>=9.1",
+    "pytest-cov>=7.1",
+    "pytest-asyncio>=1.4", # Textual dashboard tests
+    "mypy>=2.4",
+    "ruff>=0.17",
 ]
