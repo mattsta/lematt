@@ -38,7 +38,6 @@ class AcmeConfig:
     account_key: str
     challenge_dir: str
     directory_url: str = DEFAULT_DIRECTORY_URL
-    contact: list[str] | None = None
     disable_check: bool = False
 
 
@@ -310,10 +309,8 @@ class AcmeClient:
 
         # Register account
         self._log("Registering account...")
+        # No contact: Let's Encrypt ended expiry emails and no longer stores them
         reg_payload = {"termsOfServiceAgreed": True}
-        if self.config.contact:
-            reg_payload["contact"] = self.config.contact
-
         account, code, self.acct_headers = self._send_signed_request(
             self.directory["newAccount"], reg_payload
         )
@@ -408,31 +405,20 @@ class AcmeClient:
         return cert_pem
 
 
-# Legacy function wrapper for backward compatibility
 def get_crt(
     account_key: str,
     csr: str,
     acme_dir: str,
-    log=None,  # Ignored - uses loguru
-    CA: str = "",  # Deprecated
+    *,
     disable_check: bool = False,
     directory_url: str = DEFAULT_DIRECTORY_URL,
-    contact: list[str] | None = None,
     domain_context: str = "",  # Domain context for logging
 ) -> str:
-    """Legacy function wrapper for backward compatibility.
-
-    New code should use AcmeClient class directly.
-    """
-    # Handle deprecated CA parameter
-    if CA and CA != "https://acme-v02.api.letsencrypt.org":
-        directory_url = f"{CA}/directory"
-
+    """Request a signed certificate for a CSR and return it as PEM."""
     config = AcmeConfig(
         account_key=account_key,
         challenge_dir=acme_dir,
         directory_url=directory_url,
-        contact=contact,
         disable_check=disable_check,
     )
 

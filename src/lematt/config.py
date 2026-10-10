@@ -89,12 +89,6 @@ class CertificateInfo:
         days = self.days_until_expiry
         return days is not None and days < 0
 
-    @property
-    def needs_renewal(self) -> bool:
-        """Check if certificate needs renewal (within 30 days of expiry)."""
-        days = self.days_until_expiry
-        return days is None or days < 30
-
 
 @dataclass
 class DomainConfig:
@@ -144,27 +138,6 @@ class ActionConfig:
             or self.upload_certs_commands
             or self.upload_keys_commands
             or self.update_commands
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        """Convert to dictionary for backward compatibility."""
-        return {
-            "actionName": self.name,
-            "prepare": self.prepare_commands,
-            "uploadCerts": self.upload_certs_commands,
-            "uploadKeys": self.upload_keys_commands,
-            "update": self.update_commands,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, object], name: str = "default") -> ActionConfig:
-        """Create ActionConfig from dictionary."""
-        return cls(
-            name=str(data.get("actionName", name)),
-            prepare_commands=list(data.get("prepare", [])),  # type: ignore[arg-type]
-            upload_certs_commands=list(data.get("uploadCerts", [])),  # type: ignore[arg-type]
-            upload_keys_commands=list(data.get("uploadKeys", [])),  # type: ignore[arg-type]
-            update_commands=list(data.get("update", [])),  # type: ignore[arg-type]
         )
 
 

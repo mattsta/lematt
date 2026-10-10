@@ -6,7 +6,6 @@ certificate actions like prepare commands, uploads, and service reloads.
 
 import collections
 import configparser
-import contextlib
 import itertools
 import json
 import shlex
@@ -34,13 +33,11 @@ class ActionRunner:
     """Handles execution of pre/post certificate actions.
 
     This class encapsulates all action-related operations including
-    loading action configuration, preparing domains, and running
-    upload and update commands.
+    loading action configuration and running upload and update commands.
     """
 
     config: LemattConfig
     actions: DomainActions = field(default_factory=DomainActions)
-    _prepare_processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
 
     # Legacy properties for backward compatibility during transition
     @property
@@ -108,124 +105,6 @@ class ActionRunner:
                 action_config.domains = domains
                 for domain in domains:
                     self.actions.domain_configs[domain] = action_config
-
-    def get_actions_for_domain(self, domain: str) -> ActionConfig:
-        """Get the action configuration for a domain.
-
-        Args:
-            domain: The domain name.
-
-        Returns:
-            ActionConfig for the domain.
-        """
-        return self.actions.get_for_domain(domain)
-
-    def prepare_domain(self, domain: str) -> list[subprocess.Popen]:
-        """Run prepare actions for a domain.
-
-        Args:
-            domain: The domain to prepare.
-
-        Returns:
-            List of running Popen processes.
-        """
-        action_config = self.get_actions_for_domain(domain)
-        every_config = self.actions.every
-
-        processes: list[subprocess.Popen] = []
-
-        def run_prepare(config: ActionConfig | None) -> list[subprocess.Popen]:
-            if config is None or not config.prepare_commands:
-                return []
-            procs = []
-            for cmd in config.prepare_commands:
-                cmd = cmd.replace("DOMAIN", domain)
-                self.log(f"Running: {cmd}", "CMD-ASYNC", update=True)
-                procs.append(subprocess.Popen(cmd.split()))
-            return procs
-
-        processes.extend(run_prepare(action_config))
-        processes.extend(run_prepare(every_config))
-
-        return processes
-
-    def prepare_domains(self, domains: Sequence[str]) -> list[subprocess.Popen]:
-        """Run prepare actions for multiple domains.
-
-        Args:
-            domains: List of domain names.
-
-        Returns:
-            List of running Popen processes.
-        """
-        processes: list[subprocess.Popen] = []
-        for domain in domains:
-            processes.extend(self.prepare_domain(domain))
-        self._prepare_processes = processes
-        return processes
-
-    def cleanup_prepare(self, processes: list[subprocess.Popen] | None = None) -> None:
-        """Clean up prepare processes.
-
-        Args:
-            processes: List of processes to kill. Uses stored processes if None.
-        """
-        import os
-        import signal
-
-        procs = processes if processes is not None else self._prepare_processes
-
-        if not procs:
-            return
-
-        logger.debug(f"[PREPARE] Cleaning up {len(procs)} prepare process(es)")
-        killed_count = 0
-        for proc in procs:
-            try:
-                # Kill entire process group to ensure child processes are also killed
-                if proc.poll() is None:  # Process still running
-                    try:
-                        # Try killing process group first (for shell=True spawned processes)
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                        try:
-                            proc.wait(timeout=2)
-                            killed_count += 1
-                            logger.debug(
-                                f"[PREPARE] Terminated process group for PID {proc.pid}"
-                            )
-                        except subprocess.TimeoutExpired:
-                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                            proc.wait()
-                            killed_count += 1
-                            logger.debug(
-                                f"[PREPARE] Force killed process group for PID {proc.pid}"
-                            )
-                    except OSError, ProcessLookupError:
-                        # No process group, kill just the process
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=2)
-                            killed_count += 1
-                            logger.debug(f"[PREPARE] Terminated process PID {proc.pid}")
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
-                            proc.wait()
-                            killed_count += 1
-                            logger.debug(
-                                f"[PREPARE] Force killed process PID {proc.pid}"
-                            )
-            except OSError, ProcessLookupError:
-                pass  # Process already exited
-
-        if killed_count > 0:
-            logger.info(f"[PREPARE] Cleaned up {killed_count} prepare process(es)")
-
-        # Reset terminal if needed
-        with contextlib.suppress(subprocess.CalledProcessError, OSError):
-            subprocess.run(["stty", "sane"], check=False, capture_output=True)
-
-        if processes is None:
-            self._prepare_processes = []
 
     def run_command(
         self,
@@ -410,14 +289,3 @@ class ActionRunner:
         parts = domain.split(".")
         parts.reverse()
         return tuple(parts[1:])
-
-    def to_action_config(self, domain: str) -> ActionConfig:
-        """Get ActionConfig for a domain.
-
-        Args:
-            domain: Domain to get configuration for.
-
-        Returns:
-            ActionConfig instance.
-        """
-        return self.get_actions_for_domain(domain)

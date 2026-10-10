@@ -24,7 +24,6 @@ from lematt.config import (
     DomainConfig,
     KeyType,
     LemattConfig,
-    RenewalSummary,
 )
 from lematt.crypto import HAS_CRYPTOGRAPHY, get_certificate_info
 from lematt.log import EVENT
@@ -484,58 +483,34 @@ subjectAltName={san_config}"""
             )
             for key_type in key_types
         ):
-            return [
-                self.process_domain(
-                    domain_config, key_type, domain_actions, skip_prepare=True
-                )
-                for key_type in key_types
-            ]
+            return [self.process_domain(domain_config, kt) for kt in key_types]
 
-        results: list[CertificateResult] = []
-
-        # Run prepare actions ONCE before processing any key types
+        # Run prepare actions ONCE and keep them alive for all key types
         prepare_runner = PrepareActionRunner(self.config)
         prepared_processes: list[subprocess.Popen] = []
 
         try:
-            # Prepare all domains on this certificate
             for domain in domain_config.all_domains:
                 procs = prepare_runner.prepare_domain(domain, domain_actions)
                 prepared_processes.extend(procs)
 
-            # Process ALL key types with prepare processes still running
-            for key_type in key_types:
-                result = self.process_domain(
-                    domain_config,
-                    key_type,
-                    domain_actions,
-                    skip_prepare=True,
-                    prepare_processes=prepared_processes,
-                )
-                results.append(result)
-
+            return [self.process_domain(domain_config, kt) for kt in key_types]
         finally:
-            # Cleanup prepare processes after ALL key types are done
             prepare_runner.cleanup(prepared_processes)
-
-        return results
 
     def process_domain(
         self,
         domain_config: DomainConfig,
         key_type: KeyType,
-        domain_actions: DomainActions,
-        skip_prepare: bool = False,
-        prepare_processes: list[subprocess.Popen] | None = None,
     ) -> CertificateResult:
         """Process a single domain for certificate renewal.
 
+        Prepare actions are the caller's responsibility; see
+        process_domain_all_keys().
+
         Args:
             domain_config: The domain configuration.
-            skip_prepare: If True, skip running prepare actions (caller manages them).
-            prepare_processes: Existing prepare processes to reuse (if skip_prepare=True).
             key_type: Type of key (RSA or EC).
-            domain_actions: DomainActions container with action configs.
 
         Returns:
             CertificateResult with the operation outcome.
@@ -624,33 +599,9 @@ subjectAltName={san_config}"""
                     error_message="CSR generation failed",
                 )
 
-        # Run prepare actions before certificate request (unless skipped)
-        # (e.g., start temporary web server, open firewall ports)
-        if skip_prepare:
-            # Caller manages prepare processes - just use them
-            cert_success = self.request_certificate(
-                csr, cert, domain_context=f"{domain_config.primary_domain}[{key_type}]"
-            )
-        else:
-            # This cert manages its own prepare/cleanup cycle
-            prepare_runner = PrepareActionRunner(self.config)
-            prepared_processes: list[subprocess.Popen] = []
-
-            try:
-                # Prepare all domains on this certificate
-                for domain in domain_config.all_domains:
-                    procs = prepare_runner.prepare_domain(domain, domain_actions)
-                    prepared_processes.extend(procs)
-
-                # Request certificate (prepare processes kept alive during ACME challenge)
-                domain_context = f"{domain_config.primary_domain}[{key_type}]"
-                cert_success = self.request_certificate(
-                    csr, cert, domain_context=domain_context
-                )
-            finally:
-                # Always cleanup prepare processes, regardless of cert success
-                prepare_runner.cleanup(prepared_processes)
-
+        cert_success = self.request_certificate(
+            csr, cert, domain_context=f"{domain_config.primary_domain}[{key_type}]"
+        )
         if not cert_success:
             self.log(
                 f"Skipping symlinks for {domain_config} due to cert failure",
@@ -811,26 +762,3 @@ subjectAltName={san_config}"""
 
         logger.info("=" * 80)
         return None
-
-    def process_all_domains(
-        self,
-        domains: Sequence[DomainConfig],
-        domain_actions: DomainActions,
-    ) -> RenewalSummary:
-        """Process all domains for certificate renewal.
-
-        Args:
-            domains: List of domain configurations.
-            domain_actions: Dictionary of domain-specific actions.
-
-        Returns:
-            RenewalSummary with all operation outcomes.
-        """
-        summary = RenewalSummary()
-
-        for domain_config in domains:
-            for key_type in [KeyType.RSA, KeyType.EC]:
-                result = self.process_domain(domain_config, key_type, domain_actions)
-                summary.add_result(result)
-
-        return summary
