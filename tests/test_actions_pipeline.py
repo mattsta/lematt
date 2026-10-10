@@ -60,6 +60,7 @@ def test_post_renewal_actions_run_once_per_group(setup):
             # Each key type is its own result; the group still runs once
             result(["example.com", "www.example.com"], success=True, renewed=True),
             result(["mail.example.com"], success=True, renewed=True),
+            result(["a.example.net"], success=True, renewed=True),
             result(["skipped.example.com"], success=True, renewed=False),
             result(["failed.example.com"], success=False, renewed=True),
         ]
@@ -78,21 +79,24 @@ def test_post_renewal_actions_run_once_per_group(setup):
     assert by_action["default-certs"] == [
         f"{cert}/example.com*",
         f"{cert}/www.example.com*",
+        f"{cert}/a.example.net*",
     ]
     assert by_action["default-keys"] == [
         f"{key}/example.com*",
         f"{key}/www.example.com*",
+        f"{key}/a.example.net*",
     ]
-    # DOMAINS_CN / DOMAINS_ALL (DOMAINS_ALL is deduplicated; order unspecified)
+    # DOMAINS_CN / DOMAINS_ALL: deduplicated, in the same stable order
     domains_cn, domains_all = " ".join(by_action["default-update"]).split(" / ")
-    assert domains_cn == "example.com"
-    assert sorted(domains_all.split()) == ["example.com", "www.example.com"]
+    assert domains_cn.split() == ["example.com", "a.example.net"]
+    assert domains_all.split() == ["example.com", "www.example.com", "a.example.net"]
     assert by_action["mail-update"] == ["mail.example.com"]
     # [every] covers all renewed certs, in addition to their own group
-    assert sorted(by_action["every-certs"]) == [
+    assert by_action["every-certs"] == [
         f"{cert}/example.com*",
-        f"{cert}/mail.example.com*",
         f"{cert}/www.example.com*",
+        f"{cert}/a.example.net*",
+        f"{cert}/mail.example.com*",
     ]
 
 

@@ -177,24 +177,25 @@ class ActionRunner:
             domain_tuples: Set of domain tuples (each tuple is domains on one cert).
             action_config: ActionConfig with commands to run.
         """
+        # Certificates in a stable order, so expansions don't vary between runs
+        sorted_tuples = sorted(
+            domain_tuples, key=lambda names: (self._sort_by_domain(names[0]), names)
+        )
+        names = list(dict.fromkeys(itertools.chain.from_iterable(sorted_tuples)))
+
         # CERTS/KEYS: one quoted glob per name (matching every key type and
         # the SAN symlinks), with the trailing * left unquoted
-        names = [domain for domains in domain_tuples for domain in domains]
         cert_dir, key_dir = self.config.mode_dir("cert"), self.config.mode_dir("key")
         replace_cert = " ".join(
             shlex.quote(str(cert_dir / name)) + "*" for name in names
         )
         replace_key = " ".join(shlex.quote(str(key_dir / name)) + "*" for name in names)
 
-        # Get first domain (CN) from each tuple
-        first_domains = [domains[0] for domains in domain_tuples]
-        replace_domains_cn = " ".join(shlex.quote(d) for d in first_domains)
-        replace_domains_all = " ".join(
-            shlex.quote(d) for d in set(itertools.chain(*domain_tuples))
-        )
+        # DOMAINS_CN: each certificate's primary name; DOMAINS_ALL: every name
+        replace_domains_cn = " ".join(shlex.quote(d[0]) for d in sorted_tuples)
+        replace_domains_all = " ".join(shlex.quote(d) for d in names)
 
         # Build descriptive output
-        sorted_tuples = sorted(domain_tuples, key=lambda x: self._sort_by_domain(x[0]))
         descriptions = []
         for domains in sorted_tuples:
             if len(domains) > 1:
