@@ -159,7 +159,7 @@ def result(status: HealthStatus, key_type: str = "rsa") -> CertificateHealth:
 @pytest.mark.parametrize(
     ("statuses", "overall", "exit_code", "summary"),
     [
-        ([], HealthStatus.HEALTHY, 0, "Certificates: 0 healthy"),
+        ([], HealthStatus.UNKNOWN, 3, "Certificates: none configured"),
         ([HealthStatus.HEALTHY], HealthStatus.HEALTHY, 0, "Certificates: 1 healthy"),
         (
             [HealthStatus.HEALTHY, HealthStatus.UNKNOWN],

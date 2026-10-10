@@ -121,6 +121,16 @@ def load_context(
     except ConfigError as e:
         logger.error(f"Config error: {e}")
         return None
+    logger.info(
+        f"Configuration: {args.config.resolve()} "
+        f"({len(domains)} certificate lines from {loader.domains_source()})"
+    )
+    if not domains:
+        logger.warning(
+            f"No certificates configured: {loader.domains_source()} has no "
+            "certificate lines. --config defaults to conf/lematt.conf in the "
+            "current directory; pass your configuration's path."
+        )
     for warning in action_group_overlaps(domains, actions):
         logger.warning(f"Config warning: {warning}")
     return Context(args, loader, config, domains, actions)

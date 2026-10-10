@@ -122,8 +122,16 @@ class SystemHealth:
         return health
 
     def extend(self, certificates: list[CertificateHealth]) -> None:
-        """Add results (e.g. live checks), updating the status and summary."""
+        """Add results (e.g. live checks), updating the status and summary.
+
+        With no results at all the status is unknown: nothing was checked,
+        which usually means the wrong configuration was loaded.
+        """
         self.certificates.extend(certificates)
+        if not self.certificates:
+            self.status = HealthStatus.UNKNOWN
+            self.summary = "Certificates: none configured"
+            return
         self.status = max(
             (c.status for c in self.certificates),
             key=_SEVERITY.__getitem__,

@@ -220,3 +220,16 @@ def test_help_search_finds_topics_by_their_text():
 
     names = [topic.name for topic in HelpSystem().search("systemd")]
     assert names[0] == "systemd"  # name/keyword matches rank first
+
+
+def test_an_empty_configuration_is_reported_not_called_healthy(
+    monkeypatch, conf, capsys
+):
+    (conf / "domains").write_text("# only comments\n")
+
+    assert run(monkeypatch, conf, "--report") == 0
+    err = capsys.readouterr().err
+    assert f"Configuration: {conf / 'lematt.conf'} (0 certificate lines" in err
+    assert f"No certificates configured: {conf / 'domains'}" in err
+
+    assert run(monkeypatch, conf, "--health-check") == 3

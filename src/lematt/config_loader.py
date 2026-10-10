@@ -574,6 +574,12 @@ class ConfigLoader:
             verbose=verbose,
         )
 
+    def domains_source(self) -> str:
+        """Where the certificate lines come from, for messages."""
+        if self._format == "toml" and "domains" in self._config_data:
+            return f"{self.config_file or self.config_base / 'lematt.toml'} [[domains]]"
+        return str(self.config_base / "domains")
+
     def get_domains(self) -> list[DomainConfig]:
         """Certificate definitions: TOML ``[[domains]]`` or the domains file."""
         if self._format == "toml" and "domains" in self._config_data:

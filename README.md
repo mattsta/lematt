@@ -772,7 +772,7 @@ By default the checks follow each certificate's lifetime and renewal plan:
 | -------- | -------------------------------------------------------------------------------- |
 | critical | Missing, expired, revoked, or under 1/10 of the lifetime left                    |
 | warning  | Renewal overdue (past its due time by a day, or 1/10 of the lifetime if shorter) |
-| unknown  | The file doesn't parse                                                           |
+| unknown  | The file doesn't parse, or no certificates are configured at all                 |
 | healthy  | Otherwise                                                                        |
 
 `--warning-days`/`--critical-days` switch to fixed thresholds (14 and 7
@@ -786,7 +786,8 @@ with `--prometheus`, JSON otherwise.
 
 **Exit codes** follow the monitoring-plugin convention: 0 healthy, 1
 warning, 2 critical, 3 unknown (a certificate that doesn't parse, a live
-check that couldn't connect, or a configuration that doesn't load). The
+check that couldn't connect, a configuration that doesn't load, or one with no
+certificates). The
 overall status is the worst result, with warning and critical outranking
 unknown. Output goes to stderr; `--json` and `--prometheus` output goes
 to stdout.
@@ -1019,6 +1020,29 @@ curl -v http://example.com/.well-known/acme-challenge/test
 Port 80 must be open to everyone (Let's Encrypt validates from several
 unpublished locations), and `challenge_dir` must be served for every name
 on the certificate, or forwarded by a `prepare` action.
+
+**No certificates in `--status`, `--report` or `--health-check`.** These
+list the configured certificate lines; they don't scan the certificate
+directory. Every command logs which configuration it loaded:
+
+```
+Configuration: /opt/lematt/conf/lematt.conf (0 certificate lines from /opt/lematt/conf/domains)
+No certificates configured: /opt/lematt/conf/domains has no certificate lines. ...
+```
+
+Without `--config`, lematt reads `conf/lematt.conf` relative to the
+current directory, which in a fresh checkout is the commented sample.
+Pass the configuration your systemd timer uses:
+
+```bash
+systemctl cat lematt-renew.service | grep ExecStart    # shows its --config
+uv run lematt --prod --config /etc/lematt/lematt.conf --list-domains
+uv run lematt --prod --config /etc/lematt/lematt.conf --report
+```
+
+If that configuration lists no certificates either, check the file named
+in the message (`domains`, or the TOML `[[domains]]` entries) and that the
+certificates exist in the report's "Certificate directory".
 
 **"Config file not found".** `--config` defaults to `conf/lematt.conf`
 relative to the current directory; run from the lematt checkout or pass an
