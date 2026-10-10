@@ -70,14 +70,16 @@ class DashboardScreen(Screen):
     }
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, compact_mode: bool = False, **kwargs: Any) -> None:
         """Initialize the dashboard screen.
 
         Args:
+            compact_mode: Start with certificate paths hidden.
             **kwargs: Additional arguments passed to Screen.
         """
         super().__init__(**kwargs)
         self.current_view = "overview"
+        self.compact_mode = compact_mode
 
     def compose(self) -> ComposeResult:
         """Compose the dashboard layout."""
@@ -91,7 +93,7 @@ class DashboardScreen(Screen):
                     yield OverviewPanel()
 
                 with Container(id="certificates", classes="view-container"):
-                    yield CertificateTable()
+                    yield CertificateTable(compact_mode=self.compact_mode)
 
                 with Container(id="health", classes="view-container"):
                     yield HealthTable()

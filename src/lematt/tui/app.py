@@ -1,7 +1,6 @@
 """Main Textual application for the interactive dashboard."""
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +9,6 @@ from typing import Any, ClassVar
 from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.reactive import reactive
-from textual.screen import Screen
 from textual.timer import Timer
 
 from lematt.config import DomainConfig
@@ -72,11 +70,8 @@ class LemattDashboardApp(App[None]):
         Binding("q", "quit", "Quit", show=True, priority=True),
         Binding("r", "refresh_now", "Refresh", show=True),
         Binding("p", "toggle_pause", "Pause", show=True),
+        Binding("c", "toggle_compact", "Compact", show=True),
     ]
-
-    SCREENS: ClassVar[dict[str, Callable[[], Screen[Any]]]] = {
-        "dashboard": DashboardScreen
-    }
 
     CSS_PATH = Path(__file__).parent / "dashboard.css"
 
@@ -112,7 +107,7 @@ class LemattDashboardApp(App[None]):
         """Set up the dashboard when the app starts."""
         # Wait until the dashboard's widgets exist so the first data load
         # has somewhere to go (otherwise it's dropped until the next refresh)
-        await self.push_screen("dashboard")
+        await self.push_screen(DashboardScreen(compact_mode=self.config.compact_mode))
 
         # Add log entry immediately
         self._add_log("Dashboard initialized")
@@ -279,6 +274,14 @@ class LemattDashboardApp(App[None]):
     def action_toggle_pause(self) -> None:
         """Toggle pause state for auto-refresh."""
         self.is_paused = not self.is_paused
+
+    def action_toggle_compact(self) -> None:
+        """Show or hide certificate paths in the certificates view."""
+        self.config.compact_mode = not self.config.compact_mode
+        screen = self._dashboard_screen()
+        if screen is not None:
+            screen.query_one(CertificateTable).compact_mode = self.config.compact_mode
+        self._add_log(f"Compact mode {'on' if self.config.compact_mode else 'off'}")
 
     def on_certificate_table_certificate_selected(
         self, message: CertificateTable.CertificateSelected

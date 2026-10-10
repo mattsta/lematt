@@ -907,6 +907,7 @@ curl -fsS -X POST https://alerts.example.com/hook \
 ```bash
 uv run lematt --prod --dashboard
 uv run lematt --prod --dashboard --dashboard-refresh 10
+uv run lematt --prod --dashboard --dashboard-compact   # start without paths
 ```
 
 | Key     | Action                                              |
@@ -917,6 +918,7 @@ uv run lematt --prod --dashboard --dashboard-refresh 10
 | `Esc`   | Close the details view                              |
 | `r`     | Refresh now (and resume)                            |
 | `p`     | Pause/resume auto-refresh                           |
+| `c`     | Show/hide certificate paths (compact mode)          |
 | `q`     | Quit                                                |
 
 The dashboard uses the same health checks as `--health-check`, including

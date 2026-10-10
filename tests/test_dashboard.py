@@ -44,6 +44,14 @@ async def test_dashboard_loads_switches_views_and_quits(tmp_path):
             await pilot.press(key)
         await pilot.pause()
 
+        # --dashboard-compact and "c" hide the Path column
+        assert table.compact_mode is False
+        assert len(rows.columns) == 6
+        await pilot.press("c")
+        await pilot.pause()
+        assert table.compact_mode is True
+        assert len(rows.columns) == 5
+
         app.push_screen(CertificateDetailScreen(table.certificates[0]))
         await pilot.pause()
         await pilot.press("escape")
@@ -51,3 +59,24 @@ async def test_dashboard_loads_switches_views_and_quits(tmp_path):
 
         await pilot.press("q")
     assert app.return_code in (0, None)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_compact_option_starts_without_paths(tmp_path):
+    config = LemattConfig(
+        config_base=tmp_path,
+        challenge_dir=tmp_path,
+        account_key=tmp_path / "account.key",
+    )
+    app = LemattDashboardApp(
+        health_checker=HealthChecker(config=config),
+        domains=[DomainConfig("example.com")],
+        config=DashboardConfig(auto_refresh=False, compact_mode=True),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.screen.query_one(CertificateTable)
+        assert table.compact_mode is True
+        assert len(table.query_one("#cert-table", DataTable).columns) == 5
+        await pilot.press("q")

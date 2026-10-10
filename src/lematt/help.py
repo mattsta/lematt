@@ -242,6 +242,7 @@ certificate status and health information.
 | `q` | Quit dashboard |
 | `r` | Refresh now |
 | `p` | Pause/resume auto-refresh |
+| `c` | Show/hide certificate paths (compact mode) |
 | `1` | Overview view |
 | `2` | Certificates view |
 | `3` | Health view |

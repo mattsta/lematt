@@ -15,6 +15,8 @@ class KeybindingsFooter(Static):
         bindings = [
             ("q", "Quit"),
             ("r", "Refresh"),
+            ("p", "Pause"),
+            ("c", "Compact"),
             ("1", "Overview"),
             ("2", "Certificates"),
             ("3", "Health"),
