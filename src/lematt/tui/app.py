@@ -38,15 +38,15 @@ class DashboardConfig:
         refresh_interval: Seconds between auto-refreshes (default: 5.0).
         auto_refresh: Whether to enable auto-refresh (default: True).
         compact_mode: Whether to hide certificate paths (default: False).
-        warning_days: Days before expiry to show warning (default: 14).
-        critical_days: Days before expiry to show critical (default: 7).
+        warning_days: Fixed warning threshold in days (default: lifetime-aware).
+        critical_days: Fixed critical threshold in days (default: lifetime-aware).
     """
 
     refresh_interval: float = 5.0
     auto_refresh: bool = True
     compact_mode: bool = False
-    warning_days: int = 14
-    critical_days: int = 7
+    warning_days: int | None = None
+    critical_days: int | None = None
 
 
 class LemattDashboardApp(App[None]):

@@ -141,18 +141,22 @@ healthy, warning, critical or unknown, with an exit code for monitoring.
 
 - `--check-live`: Also connect to each certificate's primary domain on
   port 443 and check the certificate it serves
-- `--warning-days N`: Warning threshold (default: 14)
-- `--critical-days N`: Critical threshold (default: 7)
+- `--warning-days N` / `--critical-days N`: Use fixed day thresholds
+  instead of the lifetime-aware defaults below
 - `--json` / `--prometheus`: Machine-readable output
 - `--write-health PATH`: Also write the result (JSON, or Prometheus with
   `--prometheus`) to PATH
 
 ## Checks Performed
 
-1. **Certificate files**: file exists, parses as X.509, days until expiry
-   compared against the thresholds
+1. **Certificate files**: file exists and parses as X.509. By default:
+   - critical when expired or under 1/10 of the lifetime is left
+   - warning when lematt's renewal is overdue (past its due time plus a
+     day), including the failure count and last error
 2. **Live servers** (`--check-live`): TLS handshake with chain and
-   hostname verification, days until the served certificate expires
+   hostname verification. Warning when the served certificate has under
+   1/4 of its lifetime left (the renewed one probably wasn't deployed);
+   critical under 1/10 or expired.
 
 ## Exit Codes
 
@@ -164,7 +168,7 @@ healthy, warning, critical or unknown, with an exit code for monitoring.
             "lematt --prod --health-check",
             "lematt --prod --health-check --check-live",
             "lematt --prod --health-check --prometheus --write-health /var/lib/node_exporter/lematt.prom",
-            "lematt --prod --health-check --warning-days 21",
+            "lematt --prod --health-check --warning-days 21 --critical-days 7",
         ],
         see_also=["status", "monitoring", "notifications"],
         keywords=["health", "check", "monitoring", "diagnostics"],
@@ -184,7 +188,7 @@ certificate status and health information.
 
 - `--dashboard-refresh SECONDS`: Refresh interval (default: 5)
 - `--dashboard-compact`: Use compact display mode
-- `--warning-days` / `--critical-days`: Health thresholds
+- `--warning-days` / `--critical-days`: Fixed health thresholds (default: lifetime-aware)
 
 ## Keyboard Controls
 
@@ -457,6 +461,12 @@ Metrics:
   2=critical, 3=unknown
 - `lematt_health_check_timestamp_seconds`: Time of the check
 - `lematt_certificates_total{status}`: Certificate counts by status
+- `lematt_certificate_expiry_timestamp_seconds{domain,key_type}`
+- `lematt_certificate_renewal_due_timestamp_seconds{domain,key_type}`:
+  when lematt plans to renew
+- `lematt_certificate_last_renewal_timestamp_seconds{domain,key_type}`
+- `lematt_certificate_renewal_failures{domain,key_type}`: consecutive
+  failed attempts (alert on > 0 for a while)
 
 ## Nagios/Icinga
 

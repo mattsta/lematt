@@ -18,9 +18,14 @@ from typing import cast
 
 from loguru import logger
 
-from .config import DomainConfig, LemattConfig
+from .config import DomainConfig, KeyType, LemattConfig
 from .crypto import get_certificate_info
+from .manager import CertificateManager, RenewalPlan
 from .notifications import NotificationEvent, NotificationManager
+
+
+def _iso(moment: datetime.datetime | None) -> str | None:
+    return moment.isoformat() if moment else None
 
 
 def _utcnow() -> datetime.datetime:
@@ -53,6 +58,11 @@ class CertificateHealth:
     not_after: datetime.datetime | None = None
     issuer: str | None = None
     details: dict[str, object] = field(default_factory=dict)
+    renewal_due_at: datetime.datetime | None = None
+    renewal_basis: str | None = None
+    last_success: datetime.datetime | None = None
+    consecutive_failures: int = 0
+    last_error: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Convert to dictionary for JSON output."""
@@ -66,6 +76,13 @@ class CertificateHealth:
             "not_after": self.not_after.isoformat() if self.not_after else None,
             "issuer": self.issuer,
             "details": self.details,
+            "renewal": {
+                "due_at": _iso(self.renewal_due_at),
+                "basis": self.renewal_basis,
+                "last_success": _iso(self.last_success),
+                "consecutive_failures": self.consecutive_failures,
+                "last_error": self.last_error,
+            },
         }
 
 
@@ -116,8 +133,10 @@ class HealthChecker:
     """Performs health checks on certificates."""
 
     config: LemattConfig
-    warning_days: int = 14  # Warn when cert expires in less than this
-    critical_days: int = 7  # Critical when cert expires in less than this
+    # Fixed day thresholds; when both are None, status is relative to each
+    # certificate's lifetime and renewal state instead
+    warning_days: int | None = None
+    critical_days: int | None = None
     notification_manager: NotificationManager | None = None
 
     def check_certificate_file(
@@ -125,8 +144,14 @@ class HealthChecker:
         cert_path: Path,
         domain: str,
         key_type: str,
+        plan: RenewalPlan | None = None,
     ) -> CertificateHealth:
-        """Check health of a certificate file."""
+        """Check health of a certificate file.
+
+        With a renewal ``plan`` (and no explicit day thresholds), the result
+        reflects lematt's renewal state: a renewal that is overdue (failing)
+        is a warning long before the certificate is close to expiry.
+        """
         info = get_certificate_info(cert_path)
         if not info.exists:
             return CertificateHealth(
@@ -145,9 +170,16 @@ class HealthChecker:
                 cert_path=str(cert_path),
             )
 
-        days_until_expiry = (info.not_after - _utcnow()).days
-        status, message = self._classify(days_until_expiry, "Certificate")
-        return CertificateHealth(
+        now = _utcnow()
+        days_until_expiry = (info.not_after - now).days
+        if self._explicit_thresholds or plan is None or info.lifetime is None:
+            status, message = self._classify(days_until_expiry, "Certificate")
+        else:
+            status, message = self._classify_by_lifetime(
+                info.not_after - now, info.lifetime, plan, now
+            )
+
+        health = CertificateHealth(
             domain=domain,
             key_type=key_type,
             status=status,
@@ -157,27 +189,111 @@ class HealthChecker:
             not_after=info.not_after,
             issuer=info.issuer_dn,
         )
+        if plan is not None:
+            attempts = plan.state.attempts
+            health.renewal_due_at = plan.decision.due_at
+            health.renewal_basis = plan.decision.basis
+            health.last_success = attempts.last_success
+            health.consecutive_failures = attempts.consecutive_failures
+            health.last_error = attempts.last_error
+        return health
+
+    @property
+    def _explicit_thresholds(self) -> bool:
+        return self.warning_days is not None or self.critical_days is not None
 
     def _classify(
         self, days_until_expiry: int, subject: str
     ) -> tuple[HealthStatus, str]:
-        """Map days until expiry to a status and message."""
+        """Map days until expiry to a status using fixed day thresholds."""
+        warning = self.warning_days if self.warning_days is not None else 14
+        critical = self.critical_days if self.critical_days is not None else 7
         if days_until_expiry < 0:
             return (
                 HealthStatus.CRITICAL,
                 f"{subject} EXPIRED {abs(days_until_expiry)} days ago",
             )
-        if days_until_expiry < self.critical_days:
+        if days_until_expiry < critical:
             return (
                 HealthStatus.CRITICAL,
                 f"{subject} expires in {days_until_expiry} days (CRITICAL)",
             )
-        if days_until_expiry < self.warning_days:
+        if days_until_expiry < warning:
             return (
                 HealthStatus.WARNING,
                 f"{subject} expires in {days_until_expiry} days",
             )
         return HealthStatus.HEALTHY, f"{subject} valid for {days_until_expiry} days"
+
+    @staticmethod
+    def _classify_by_lifetime(
+        remaining: datetime.timedelta,
+        lifetime: datetime.timedelta,
+        plan: RenewalPlan,
+        now: datetime.datetime,
+    ) -> tuple[HealthStatus, str]:
+        """Status relative to the certificate's lifetime and renewal state.
+
+        Critical: expired, or less than a tenth of the lifetime left.
+        Warning: renewal is overdue (past its due time plus a grace period of
+        a day, or a tenth of the lifetime for short-lived certificates).
+        """
+        days = remaining.days
+        attempts = plan.state.attempts
+        failing = (
+            f" ({attempts.consecutive_failures} failed attempt(s): {attempts.last_error})"
+            if attempts.consecutive_failures
+            else ""
+        )
+        if remaining <= datetime.timedelta(0):
+            return (
+                HealthStatus.CRITICAL,
+                f"Certificate EXPIRED {abs(days)} days ago{failing}",
+            )
+        if remaining < lifetime / 10:
+            return (
+                HealthStatus.CRITICAL,
+                f"Certificate expires in {days} days (CRITICAL){failing}",
+            )
+        due = plan.decision.due_at
+        grace = min(datetime.timedelta(days=1), lifetime / 10)
+        if due is not None and now > due + grace:
+            return (
+                HealthStatus.WARNING,
+                f"Renewal overdue since {due:%Y-%m-%d %H:%M} UTC; expires in "
+                f"{days} days{failing}",
+            )
+        when = f"; renews {due:%Y-%m-%d} ({plan.decision.basis})" if due else ""
+        return HealthStatus.HEALTHY, f"Certificate valid for {days} days{when}"
+
+    @staticmethod
+    def _classify_served(
+        remaining: datetime.timedelta, lifetime: datetime.timedelta
+    ) -> tuple[HealthStatus, str]:
+        """Status of a certificate a server presents, relative to its lifetime.
+
+        A served certificate with less than a quarter of its lifetime left
+        should already have been replaced (lematt renews at about a third),
+        so the renewed certificate probably wasn't deployed.
+        """
+        days = remaining.days
+        if remaining <= datetime.timedelta(0):
+            return (
+                HealthStatus.CRITICAL,
+                f"Live certificate EXPIRED {abs(days)} days ago",
+            )
+        if remaining < lifetime / 10:
+            return (
+                HealthStatus.CRITICAL,
+                f"Live certificate expires in {days} days (CRITICAL)",
+            )
+        if remaining < lifetime / 4:
+            return (
+                HealthStatus.WARNING,
+                f"Live certificate expires in {days} days and should have been "
+                "replaced by now (was the renewed certificate deployed?)",
+            )
+        return HealthStatus.HEALTHY, f"Live certificate valid for {days} days"
 
     def check_live_certificate(
         self,
@@ -227,8 +343,15 @@ class HealthChecker:
                         issuer = value
                         break
 
-            days_until_expiry = (not_after - _utcnow()).days
-            status, message = self._classify(days_until_expiry, "Live certificate")
+            now = _utcnow()
+            days_until_expiry = (not_after - now).days
+            not_before = _peer_time(cert.get("notBefore"))
+            if self._explicit_thresholds or not_before is None:
+                status, message = self._classify(days_until_expiry, "Live certificate")
+            else:
+                status, message = self._classify_served(
+                    not_after - now, not_after - not_before
+                )
 
             return CertificateHealth(
                 domain=domain,
@@ -273,20 +396,18 @@ class HealthChecker:
             key_types = ["rsa", "ec"]
 
         certificates: list[CertificateHealth] = []
+        manager = CertificateManager(self.config)
+        now = _utcnow()
         worst_status = HealthStatus.HEALTHY
 
         for domain_config in domains:
             for key_type in key_types:
-                # Construct cert path based on config
-                from .config import KeyType
-
                 kt = KeyType.from_string(key_type)
-                cert_path = Path(self.config.get_cert_path(domain_config, kt))
-
                 health = self.check_certificate_file(
-                    cert_path,
+                    Path(self.config.get_cert_path(domain_config, kt)),
                     domain_config.primary_domain,
                     key_type,
+                    plan=manager.plan(domain_config, kt, now),
                 )
                 certificates.append(health)
 
@@ -430,7 +551,50 @@ class PrometheusMetrics:
             ]
         )
 
+        lines.extend(self._renewal_metrics())
         return "\n".join(lines) + "\n"
+
+    def _renewal_metrics(self) -> list[str]:
+        """Timestamp/counter gauges from lematt's renewal state."""
+
+        def ts(moment: datetime.datetime | None) -> str | None:
+            if moment is None:
+                return None
+            return f"{moment.replace(tzinfo=datetime.UTC).timestamp():.0f}"
+
+        families = [
+            (
+                "lematt_certificate_expiry_timestamp_seconds",
+                "Unix time the certificate expires",
+                lambda c: ts(c.not_after),
+            ),
+            (
+                "lematt_certificate_renewal_due_timestamp_seconds",
+                "Unix time lematt plans to renew the certificate",
+                lambda c: ts(c.renewal_due_at),
+            ),
+            (
+                "lematt_certificate_last_renewal_timestamp_seconds",
+                "Unix time of the last successful renewal",
+                lambda c: ts(c.last_success),
+            ),
+            (
+                "lematt_certificate_renewal_failures",
+                "Consecutive failed renewal attempts",
+                lambda c: str(c.consecutive_failures) if c.key_type != "live" else None,
+            ),
+        ]
+        lines: list[str] = []
+        for name, help_text, value_of in families:
+            samples = [
+                (f'domain="{c.domain}",key_type="{c.key_type}"', value)
+                for c in self.health.certificates
+                if (value := value_of(c)) is not None
+            ]
+            if samples:
+                lines.extend(["", f"# HELP {name} {help_text}", f"# TYPE {name} gauge"])
+                lines.extend(f"{name}{{{labels}}} {value}" for labels, value in samples)
+        return lines
 
 
 def write_health_status_file(
@@ -491,3 +655,11 @@ case "$STATUS" in
         ;;
 esac
 """
+
+
+def _peer_time(value: object) -> datetime.datetime | None:
+    """Parse an ssl.getpeercert() timestamp ("Jan  1 00:00:00 2026 GMT")."""
+    try:
+        return datetime.datetime.strptime(str(value), "%b %d %H:%M:%S %Y %Z")
+    except ValueError:
+        return None

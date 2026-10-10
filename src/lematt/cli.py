@@ -264,15 +264,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--warning-days",
         dest="warning_days",
         type=int,
-        default=14,
-        help="Days before expiry to warn (default: 14)",
+        default=None,
+        help="Warn below N days left (default: when renewal is overdue)",
     )
     health_group.add_argument(
         "--critical-days",
         dest="critical_days",
         type=int,
-        default=7,
-        help="Days before expiry for critical alert (default: 7)",
+        default=None,
+        help="Critical below N days left (default: under 1/10 of the lifetime)",
     )
     health_group.add_argument(
         "--prometheus",

@@ -597,8 +597,8 @@ Systemd Automation:
 Health Checks:
   --health-check      Run health check on all certificates
   --check-live        Also check live certificates served by domains
-  --warning-days N    Days before expiry to warn (default: 14)
-  --critical-days N   Days before expiry for critical (default: 7)
+  --warning-days N    Fixed warning threshold (default: renewal overdue)
+  --critical-days N   Fixed critical threshold (default: < 1/10 of lifetime)
   --prometheus        Output health check as Prometheus metrics
   --write-health PATH Write health status to file
 
@@ -898,7 +898,7 @@ lematt --test --health-check --write-health /var/lib/lematt/health.json
 # Check live certificates served by domains
 lematt --test --health-check --check-live
 
-# Custom warning/critical thresholds
+# Fixed warning/critical thresholds instead of the lifetime-aware defaults
 lematt --test --health-check --warning-days 21 --critical-days 14
 ```
 
@@ -962,6 +962,14 @@ lematt_certificate_status{domain="example.com",key_type="ec"} 0
 lematt_certificates_total{status="healthy"} 4
 lematt_certificates_total{status="warning"} 0
 lematt_certificates_total{status="critical"} 0
+
+# HELP lematt_certificate_renewal_due_timestamp_seconds Unix time lematt plans to renew the certificate
+# TYPE lematt_certificate_renewal_due_timestamp_seconds gauge
+lematt_certificate_renewal_due_timestamp_seconds{domain="example.com",key_type="rsa"} 1793145600
+
+# HELP lematt_certificate_renewal_failures Consecutive failed renewal attempts
+# TYPE lematt_certificate_renewal_failures gauge
+lematt_certificate_renewal_failures{domain="example.com",key_type="rsa"} 0
 ```
 
 ### Monitoring Integration
