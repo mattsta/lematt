@@ -1,5 +1,7 @@
 """Executor: sequential/parallel runs, progress tracking, prepare locks."""
 
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -96,14 +98,47 @@ def test_sequential_runs_need_no_locks(config):
     assert runner._held_locks == []
 
 
-def test_parallel_workers_receive_prepare_locks(config, capfd):
-    config.verbose = True  # workers log lock activity at debug level
+def test_parallel_workers_receive_prepare_locks(tmp_path):
+    """Parallel workers serialize prepare actions on shared names.
 
-    CertificateExecutor(config, max_workers=2).process_batch(DOMAINS, DomainActions())
+    The dry run goes through the CLI in a separate process so that the
+    workers' output reaches a pipe this test owns. With the forkserver start
+    method (Linux's default), workers inherit the stderr their server
+    started with, which was an earlier test's capture rather than this
+    test's. A dry run makes no network requests.
+    """
+    (tmp_path / "lematt.conf").write_text(
+        f"[config]\nchallengeDropDir: {tmp_path}\n"
+        f"accountKey: {tmp_path / 'account.key'}\n"
+    )
+    (tmp_path / "account.key").write_text("unused by dry runs")
+    (tmp_path / "domains").write_text(
+        "".join(" ".join(d.all_domains) + "\n" for d in DOMAINS)
+    )
+    (tmp_path / "actions.conf").write_text("[default]\n")
 
-    err = capfd.readouterr().err
-    assert "Acquiring lock for domain: www.example.com" in err
-    assert "Released lock for domain: www.example.com" in err
+    run = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "lematt",
+            "--test",
+            "--dry-run",
+            "--verbose",  # workers log lock activity at debug level
+            "--parallel",
+            "2",
+            "--config",
+            str(tmp_path / "lematt.conf"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert run.returncode == 0, run.stderr
+    assert "Acquiring lock for domain: www.example.com" in run.stderr
+    assert "Released lock for domain: www.example.com" in run.stderr
 
 
 def test_terminated_workers_unwind_for_cleanup():
