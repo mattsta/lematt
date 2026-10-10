@@ -5,7 +5,7 @@ All display components are designed to be reusable and composable.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -36,7 +36,7 @@ class StatusStyle:
     INFO = Style(color="cyan")
     MUTED = Style(color="bright_black")
 
-    ICONS = {
+    ICONS: ClassVar[dict[str, str]] = {
         "healthy": "✓",
         "warning": "⚠",
         "critical": "✗",

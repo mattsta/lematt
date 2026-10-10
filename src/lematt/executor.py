@@ -363,8 +363,7 @@ class CertificateExecutor:
         in_progress = []
         pending = []
 
-        for task_key, task in p.tasks.items():
-            # Extract domain name from task_key (format: "domain.com:rsa" or "domain.com:ec")
+        for task in p.tasks.values():
             domain = task.domain
             key_type = task.key_type
 

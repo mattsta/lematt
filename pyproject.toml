@@ -66,8 +66,22 @@ include = [
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["I", "UP"]
-ignore = ["E501", "ANN401"]  # Line length, Any type
+select = [
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+    "PLE",  # pylint errors
+]
+ignore = [
+    "E501",    # line length (the formatter handles wrapping)
+    "RUF001",  # status glyphs like ✓ ✗ ⚠ are intentional
+]
 
 [tool.ruff.lint.pyupgrade]
 keep-runtime-typing = false

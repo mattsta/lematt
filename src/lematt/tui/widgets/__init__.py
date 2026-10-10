@@ -8,11 +8,11 @@ from lematt.tui.widgets.sidebar import StatusSidebar
 from lematt.tui.widgets.tables import CertificateTable, HealthTable
 
 __all__ = [
-    "DashboardHeader",
-    "KeybindingsFooter",
-    "StatusSidebar",
     "CertificateTable",
+    "DashboardHeader",
     "HealthTable",
-    "OverviewPanel",
+    "KeybindingsFooter",
     "LogViewer",
+    "OverviewPanel",
+    "StatusSidebar",
 ]

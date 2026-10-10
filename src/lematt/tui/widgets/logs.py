@@ -1,8 +1,9 @@
 """Dashboard log viewer widget for activity logs."""
 
 from datetime import datetime
+from typing import ClassVar
 
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.reactive import reactive
 from textual.widgets import RichLog
 
@@ -18,7 +19,7 @@ class LogViewer(RichLog):
         End: Scroll to bottom of logs
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("home", "scroll_top", "Top", show=False),
         Binding("end", "scroll_bottom", "Bottom", show=False),
     ]

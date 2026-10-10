@@ -568,16 +568,18 @@ subjectAltName={san_config}"""
                 key_path=private_key,
             )
 
-        # Generate key if needed (nested if is intentional - only generate then check result)
-        if self.config.always_generate_new_keys or not os.path.isfile(private_key):  # noqa: SIM102
-            if not self.generate_key(private_key, key_type):
-                return CertificateResult(
-                    domain_config=domain_config,
-                    key_type=key_type,
-                    success=False,
-                    renewed=True,
-                    error_message="Key generation failed",
-                )
+        # Generate key if needed
+        needs_key = self.config.always_generate_new_keys or not os.path.isfile(
+            private_key
+        )
+        if needs_key and not self.generate_key(private_key, key_type):
+            return CertificateResult(
+                domain_config=domain_config,
+                key_type=key_type,
+                success=False,
+                renewed=True,
+                error_message="Key generation failed",
+            )
 
         # Create key symlinks for SAN domains
         for domain in domain_config.san_domains:
@@ -589,15 +591,17 @@ subjectAltName={san_config}"""
             )
 
         # Generate CSR if needed
-        if self.config.always_generate_new_keys or not os.path.isfile(csr):
-            if not self.generate_csr(private_key, domain_config.all_domains, csr):
-                return CertificateResult(
-                    domain_config=domain_config,
-                    key_type=key_type,
-                    success=False,
-                    renewed=True,
-                    error_message="CSR generation failed",
-                )
+        needs_csr = self.config.always_generate_new_keys or not os.path.isfile(csr)
+        if needs_csr and not self.generate_csr(
+            private_key, domain_config.all_domains, csr
+        ):
+            return CertificateResult(
+                domain_config=domain_config,
+                key_type=key_type,
+                success=False,
+                renewed=True,
+                error_message="CSR generation failed",
+            )
 
         cert_success = self.request_certificate(
             csr, cert, domain_context=f"{domain_config.primary_domain}[{key_type}]"

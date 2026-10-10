@@ -19,7 +19,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from .config import DomainConfig, LemattConfig  # noqa: TC001 - used at runtime
+from .config import DomainConfig, LemattConfig
 from .notifications import NotificationEvent, NotificationManager
 
 

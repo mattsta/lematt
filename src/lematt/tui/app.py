@@ -1,13 +1,16 @@
 """Main Textual application for the interactive dashboard."""
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any, ClassVar
 
 from textual.app import App
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.reactive import reactive
+from textual.screen import Screen
 
 from lematt.config import DomainConfig
 from lematt.health import HealthChecker, SystemHealth
@@ -57,13 +60,15 @@ class LemattDashboardApp(App[None]):
         1-4: Switch views
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit", show=True, priority=True),
         Binding("r", "refresh_now", "Refresh", show=True),
         Binding("p", "toggle_pause", "Pause", show=True),
     ]
 
-    SCREENS = {"dashboard": DashboardScreen}
+    SCREENS: ClassVar[dict[str, Callable[[], Screen[Any]]]] = {
+        "dashboard": DashboardScreen
+    }
 
     CSS_PATH = Path(__file__).parent / "dashboard.css"
 

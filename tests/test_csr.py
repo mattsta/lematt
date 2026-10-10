@@ -2,10 +2,10 @@
 
 import pytest
 
-x509 = pytest.importorskip("cryptography.x509")
-
 from lematt.config import KeyType, LemattConfig
 from lematt.manager import CertificateManager
+
+x509 = pytest.importorskip("cryptography.x509")
 
 
 @pytest.mark.parametrize("key_type", [KeyType.RSA, KeyType.EC])

@@ -311,7 +311,7 @@ class AcmeClient:
         self._log("Registering account...")
         # No contact: Let's Encrypt ended expiry emails and no longer stores them
         reg_payload = {"termsOfServiceAgreed": True}
-        account, code, self.acct_headers = self._send_signed_request(
+        _, code, self.acct_headers = self._send_signed_request(
             self.directory["newAccount"], reg_payload
         )
 
@@ -364,11 +364,11 @@ class AcmeClient:
                 except Exception as e:
                     raise ValueError(
                         f"Challenge file not accessible at {wellknown_url}: {e}"
-                    )
+                    ) from e
 
             # Tell ACME server we're ready
             self._send_signed_request(challenge["url"], {})
-            self._log(f"Waiting for ACME to validate challenge...")
+            self._log("Waiting for ACME to validate challenge...")
 
             # Wait for validation
             authorization = self._poll_until_ready(auth_url, ["pending"], timeout=300)

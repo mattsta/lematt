@@ -1,5 +1,9 @@
 """Interactive table widgets for displaying certificates and health data."""
 
+from typing import ClassVar
+
+from rich.text import Text
+from textual.binding import BindingType
 from textual.containers import Container
 from textual.message import Message
 from textual.reactive import reactive
@@ -21,7 +25,7 @@ class CertificateTable(Container):
         Enter: View details for selected certificate
     """
 
-    BINDINGS = []
+    BINDINGS: ClassVar[list[BindingType]] = []
 
     certificates: reactive[list[CertificateHealth]] = reactive(list, init=False)
     filter_status: reactive[str] = reactive("all")
@@ -161,30 +165,22 @@ class CertificateTable(Container):
             else:
                 days_text = str(cert.days_until_expiry)
                 days_style = "bold green"
+            days = Text(days_text, style=days_style)
 
             # Expiry date
             expiry_str = (
                 cert.not_after.strftime("%Y-%m-%d") if cert.not_after else "Unknown"
             )
 
-            # Build row
-            if self.compact_mode:
-                row = (
-                    status_text,
-                    cert.domain,
-                    cert.key_type,
-                    expiry_str,
-                    days_text,
-                )
-            else:
-                row = (
-                    status_text,
-                    cert.domain,
-                    cert.key_type,
-                    expiry_str,
-                    days_text,
-                    cert.cert_path or "",
-                )
+            row: tuple[str | Text, ...] = (
+                status_text,
+                cert.domain,
+                cert.key_type,
+                expiry_str,
+                days,
+            )
+            if not self.compact_mode:
+                row = (*row, cert.cert_path or "")
 
             table.add_row(*row)
 

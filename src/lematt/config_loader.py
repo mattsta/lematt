@@ -7,7 +7,7 @@ INI (legacy) and TOML (modern) formats.
 import configparser
 import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path  # noqa: TC003 - used at runtime in dataclass
+from pathlib import Path
 
 from loguru import logger
 

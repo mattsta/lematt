@@ -1,11 +1,12 @@
 """Screen definitions for the Textual dashboard application."""
 
 import json
+from typing import ClassVar
 
 from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, RadioButton, RadioSet, Static
@@ -33,7 +34,7 @@ class DashboardScreen(Screen):
     - Footer (keybindings)
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("1", "switch_view('overview')", "Overview", show=False),
         Binding("2", "switch_view('certificates')", "Certificates", show=False),
         Binding("3", "switch_view('health')", "Health", show=False),
@@ -151,7 +152,7 @@ class CertificateDetailScreen(Screen):
     - File paths
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "dismiss", "Close", show=True),
         Binding("e", "export_json", "Export JSON", show=True),
     ]
@@ -314,7 +315,7 @@ class FilterDialogScreen(Screen):
     - Status (all/healthy/warning/critical)
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "dismiss", "Cancel", show=True),
     ]
 
