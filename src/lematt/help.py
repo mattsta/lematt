@@ -706,21 +706,28 @@ class HelpSystem:
         return self.topics.get(name.lower())
 
     def search(self, query: str) -> list[HelpTopic]:
-        """Search for topics matching a query."""
+        """Search for topics matching a query.
+
+        Topics whose name, title, summary or keywords match come first,
+        then topics that only mention the query in their text or examples.
+        """
         query_lower = query.lower()
-        results = []
+        strong, mentions = [], []
 
         for topic in self.topics.values():
-            # Check name, title, summary, and keywords
             if (
                 query_lower in topic.name.lower()
                 or query_lower in topic.title.lower()
                 or query_lower in topic.summary.lower()
                 or any(query_lower in kw for kw in topic.keywords)
             ):
-                results.append(topic)
+                strong.append(topic)
+            elif query_lower in topic.content.lower() or any(
+                query_lower in example.lower() for example in topic.examples
+            ):
+                mentions.append(topic)
 
-        return results
+        return strong + mentions
 
     def list_topics(self, category: HelpCategory | None = None) -> list[HelpTopic]:
         """List all topics, optionally filtered by category."""

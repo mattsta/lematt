@@ -988,7 +988,9 @@ uv run lematt --help-search wildcard
 
 Topics: `run`, `revoke`, `status`, `health`, `dashboard`, `config`,
 `configuration`, `domains`, `actions`, `challenges`, `systemd`,
-`monitoring`, `notifications`, `troubleshooting`.
+`monitoring`, `notifications`, `troubleshooting`. `--help-search` matches
+topic names, titles, summaries and keywords first, then any topic whose
+text or examples mention the query.
 
 ---
 

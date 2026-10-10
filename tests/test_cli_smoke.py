@@ -210,3 +210,13 @@ def test_health_check_without_a_usable_config_is_unknown(tmp_path):
 
     assert main(["--test", "--config", str(missing), "--health-check"]) == 3
     assert main(["--test", "--config", str(missing), "--status"]) == 1
+
+
+def test_help_search_finds_topics_by_their_text():
+    from lematt.help import HelpSystem
+
+    names = [topic.name for topic in HelpSystem().search("node_exporter")]
+    assert "monitoring" in names  # only mentioned in the topic's text
+
+    names = [topic.name for topic in HelpSystem().search("systemd")]
+    assert names[0] == "systemd"  # name/keyword matches rank first
