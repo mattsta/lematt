@@ -27,7 +27,11 @@ class Http01Solver:
     challenge_dir: Path
     self_check: bool = True
     client: httpx.Client = field(
-        default_factory=lambda: httpx.Client(timeout=10.0, follow_redirects=True)
+        # Like the CA: follow redirects (including to https) without judging
+        # the target's certificate, which may be the expired one being renewed
+        default_factory=lambda: httpx.Client(
+            timeout=10.0, follow_redirects=True, verify=False
+        )
     )
 
     def path(self, token: str) -> Path:

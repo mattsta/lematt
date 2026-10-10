@@ -196,3 +196,21 @@ def test_unsafe_tokens_are_refused(tmp_path):
 )
 def test_retry_after_parsing(header, seconds):
     assert parse_retry_after(header) == seconds
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        '<https://ca/a/3>;rel="alternate", <https://ca/dir>;rel="index"',
+        "<https://ca/a/3>; rel=alternate, <https://ca/dir>; rel=index",
+        '<https://ca/dir>;rel="index up", <https://ca/a/3>;rel="alternate"',
+    ],
+)
+def test_link_header_parsing(header):
+    import httpx
+
+    from lematt.acme.transport import links
+
+    response = httpx.Response(200, headers={"Link": header})
+
+    assert links(response, "alternate") == ["https://ca/a/3"]

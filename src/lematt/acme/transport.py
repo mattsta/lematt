@@ -21,7 +21,8 @@ from lematt.acme.jws import AccountKey
 # if the server keeps rejecting them
 MAX_BAD_NONCE_RETRIES = 5
 
-_LINK = re.compile(r'<([^>]*)>\s*;\s*rel="?([^";]+)"?')
+_LINK = re.compile(r"<([^>]*)>([^<]*)")  # target, then its ;-parameters
+_REL = re.compile(r"""\brel\s*=\s*(?:"([^"]*)"|([^\s;,]+))""")
 
 
 def _user_agent() -> str:
@@ -36,7 +37,10 @@ def links(response: httpx.Response, rel: str) -> list[str]:
     """All Link header targets with the given relation (e.g. "alternate")."""
     found: list[str] = []
     for header in response.headers.get_list("link"):
-        found.extend(url for url, r in _LINK.findall(header) if r == rel)
+        for url, params in _LINK.findall(header):
+            match = _REL.search(params)
+            if match and rel in (match.group(1) or match.group(2)).split():
+                found.append(url)
     return found
 
 
