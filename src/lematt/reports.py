@@ -21,7 +21,7 @@ from rich.text import Text
 from rich.tree import Tree
 
 from .config import DomainActions, DomainConfig, KeyType, LemattConfig
-from .display import DisplayConfig, StatusStyle, console
+from .display import StatusStyle, console
 from .health import SystemHealth
 
 REPORT_FORMATS = ("console", "json", "markdown")
@@ -251,9 +251,6 @@ class ReportGenerator:
 
 class ReportRenderer:
     """Renders reports in various formats."""
-
-    def __init__(self, display_config: DisplayConfig | None = None):
-        self.display_config = display_config or DisplayConfig()
 
     def render_inventory_table(
         self,

@@ -35,22 +35,7 @@ from lematt.crypto import (
 )
 
 # UI/Display components
-from lematt.display import (
-    DisplayConfig,
-    StatusStyle,
-    console,
-    create_action_table,
-    create_certificate_table,
-    create_config_tree,
-    create_domain_tree,
-    create_health_summary,
-    create_renewal_progress,
-    print_banner,
-    print_error,
-    print_info,
-    print_success,
-    print_warning,
-)
+from lematt.display import StatusStyle, console
 from lematt.executor import (
     BatchProgress,
     CertificateExecutor,
@@ -119,7 +104,6 @@ __all__ = [
     "ConfigLoader",
     # Dashboard
     "DashboardConfig",
-    "DisplayConfig",
     "DomainActions",
     "DomainConfig",
     # Health checks
@@ -157,26 +141,15 @@ __all__ = [
     "__version__",
     # Display components
     "console",
-    "create_action_table",
-    "create_certificate_table",
-    "create_config_tree",
     "create_csr",
-    "create_domain_tree",
     "create_example_toml",
-    "create_health_summary",
-    "create_renewal_progress",
     "generate_full_report",
     "generate_private_key",
     "get_certificate_info",
     "get_quick_help",
     # Logging
     "logger",
-    "print_banner",
-    "print_error",
     "print_help",
-    "print_info",
-    "print_success",
-    "print_warning",
     "search_help",
     "setup_logging",
 ]

@@ -37,12 +37,6 @@ class ActionRunner:
     config: LemattConfig
     actions: DomainActions = field(default_factory=DomainActions)
 
-    # Legacy properties for backward compatibility during transition
-    @property
-    def domain_actions(self) -> DomainActions:
-        """Get domain actions (for backward compatibility)."""
-        return self.actions
-
     def log(self, message: str, mode: str = "", update: bool = False) -> None:
         """Log a message with optional mode prefix."""
         if not message:
