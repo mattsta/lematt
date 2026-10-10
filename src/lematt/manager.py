@@ -34,6 +34,7 @@ from lematt.config import (
 )
 from lematt.crypto import (
     create_csr,
+    csr_matches,
     generate_private_key,
     get_certificate_info,
     write_file_atomically,
@@ -748,34 +749,44 @@ class CertificateManager:
                 )
             return result(success=True, renewed=True)
 
-        needs_key = self.config.always_generate_new_keys or not os.path.isfile(
+        # New key material is staged and replaces the live files only once a
+        # certificate for it has been issued, so a failed renewal never leaves
+        # a key on disk that doesn't match the deployed certificate.
+        staged_key, staged_csr, staged_cert = (
+            f"{p}.new" for p in (private_key, csr, cert)
+        )
+        rotate_key = self.config.always_generate_new_keys or not os.path.isfile(
             private_key
         )
-        if needs_key and not self.generate_key(private_key, key_type):
+        if rotate_key and not self.generate_key(staged_key, key_type):
             return result(success=False, renewed=True, error="Key generation failed")
 
-        for domain in domain_config.san_domains:
-            self.create_atomic_symlink(
-                os.path.basename(private_key),
-                self.get_customized_name("key", domain, "key", key_type),
-                key_type,
-            )
-
-        needs_csr = self.config.always_generate_new_keys or not os.path.isfile(csr)
-        if needs_csr and not self.generate_csr(
-            private_key, domain_config.all_domains, csr
+        # Reuse the CSR only if it is for the current key and names
+        reuse_csr = not rotate_key and csr_matches(
+            csr, private_key, domain_config.all_domains
+        )
+        request = csr if reuse_csr else staged_csr
+        if not reuse_csr and not self.generate_csr(
+            staged_key if rotate_key else private_key,
+            domain_config.all_domains,
+            staged_csr,
         ):
+            _discard(staged_key, staged_csr)
             return result(success=False, renewed=True, error="CSR generation failed")
 
+        issued = plan.state.issued
         failure = self.request_certificate(
-            csr,
-            cert,
+            request,
+            staged_cert,
             domain_context=f"{domain_config.primary_domain}[{key_type}]",
             session=session,
-            replaces=plan.state.issued.ari_id if plan.state.issued else None,
+            # Only lematt's own certificates: the CA rejects `replaces` for
+            # certificates another account (or CA) issued
+            replaces=issued.ari_id if issued and issued.issued_at else None,
             profile=self.config.profile_for(domain_config),
         )
         if failure is not None:
+            _discard(staged_key, staged_csr, staged_cert)
             self.record_failure(plan, failure)
             self.log(
                 f"Next attempt after {plan.state.attempts.next_attempt_after} UTC",
@@ -786,7 +797,21 @@ class CertificateManager:
                 success=False, renewed=True, error="Certificate request failed"
             )
 
+        # Install key and CSR first, then the certificate issued for them
+        for staged, live in (
+            (staged_key, private_key),
+            (staged_csr, csr),
+            (staged_cert, cert),
+        ):
+            if os.path.exists(staged):
+                os.replace(staged, live)
+
         for domain in domain_config.san_domains:
+            self.create_atomic_symlink(
+                os.path.basename(private_key),
+                self.get_customized_name("key", domain, "key", key_type),
+                key_type,
+            )
             self.create_atomic_symlink(
                 os.path.basename(cert),
                 self.get_customized_name("cert", domain, "cert-combined", key_type),
@@ -949,3 +974,10 @@ class CertificateManager:
 
         logger.info("=" * 100)
         return None
+
+
+def _discard(*paths: str) -> None:
+    """Remove staged files of an abandoned renewal."""
+    for path in paths:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)

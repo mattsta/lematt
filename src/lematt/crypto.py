@@ -185,3 +185,19 @@ def _crl_urls(cert: x509.Certificate) -> list[str]:
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def csr_matches(csr_path: str | Path, key_path: str | Path, domains: list[str]) -> bool:
+    """Whether a CSR is for this private key and exactly these names."""
+    try:
+        csr = x509.load_pem_x509_csr(Path(csr_path).read_bytes())
+        key = load_private_key(key_path)
+        san = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    except OSError, ValueError, x509.ExtensionNotFound:
+        return False
+    same_key = csr.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    ) == key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    return same_key and san.value.get_values_for_type(x509.DNSName) == domains

@@ -359,3 +359,59 @@ def test_caa_records_pin_this_account(monkeypatch, setup, capsys):
     ]
     assert "accounturi=https://acme.test/acct/" in lines[0]
     assert lines[0].endswith('; validationmethods=http-01"')
+
+
+def _key_matches_cert(base, name: str, tag: str) -> bool:
+    from cryptography.hazmat.primitives.serialization import PublicFormat
+
+    from lematt.crypto import load_private_key
+
+    key = load_private_key(base / "test" / "key" / f"{name}-key.{tag}.test.pem")
+    cert = x509.load_pem_x509_certificates(
+        (base / "test" / "cert" / f"{name}-cert-combined.{tag}.test.pem").read_bytes()
+    )[0]
+    spki = (Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    return key.public_key().public_bytes(*spki) == cert.public_key().public_bytes(*spki)
+
+
+def test_failed_key_rotation_keeps_the_deployed_key(monkeypatch, setup):
+    base, server, _ = setup
+    with (base / "lematt.conf").open("a") as f:
+        f.write("alwaysGenerateNewKeys: yes\n")
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    key = base / "test" / "key" / "mail.example.org-key.rsa2048.test.pem"
+    before = key.read_bytes()
+
+    server.rate_limit_new_order = 3600
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 1
+
+    assert key.read_bytes() == before  # still matches the deployed certificate
+    assert _key_matches_cert(base, "mail.example.org", "rsa2048")
+    assert not list((base / "test").rglob("*.new"))
+
+    server.rate_limit_new_order = None
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+    assert key.read_bytes() != before  # rotated once a certificate was issued
+    assert _key_matches_cert(base, "mail.example.org", "rsa2048")
+
+
+def test_replacing_a_deleted_key_also_replaces_its_csr(monkeypatch, setup):
+    base, _, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    (base / "test" / "key" / "mail.example.org-key.rsa2048.test.pem").unlink()
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+
+    assert _key_matches_cert(base, "mail.example.org", "rsa2048")
+
+
+def test_replaces_is_only_sent_for_certificates_lematt_issued(monkeypatch, setup):
+    import shutil
+
+    base, server, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    shutil.rmtree(base / "test" / "state")  # e.g. certificates from another client
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+
+    assert "replaces" not in server.payloads["new-order"][-1]
