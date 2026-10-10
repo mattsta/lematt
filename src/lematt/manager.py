@@ -20,6 +20,7 @@ from loguru import logger
 from lematt.acme import (
     AcmeError,
     AlreadyReplacedError,
+    ChallengeError,
     fetch_renewal_info,
     issue_certificate,
 )
@@ -444,7 +445,8 @@ class CertificateManager:
         """Request a signed certificate from the ACME server.
 
         Only transient failures (network errors, 5xx) are retried, waiting
-        for the server's Retry-After when given. Anything else (validation
+        for the server's Retry-After (up to a minute; longer waits are left to
+        the failure backoff). Anything else (validation
         failures, rate limits, bad requests) fails immediately: retrying
         can't help and would spend Let's Encrypt's failed-validation limit.
         A saved account the CA no longer knows is replaced once.
@@ -463,9 +465,13 @@ class CertificateManager:
             None on success, otherwise what went wrong.
         """
         session = session or self.new_session()
-        csr_pem = pathlib.Path(csr_path).read_bytes()
+        try:
+            csr_pem = pathlib.Path(csr_path).read_bytes()
+        except OSError as e:
+            return RequestFailure(f"cannot read CSR: {e}")
         account_replaced = False
-        for attempt in range(1, max_retries + 1):
+        attempt = 1
+        while True:
             try:
                 session.ensure_account()
                 issued = issue_certificate(
@@ -482,7 +488,8 @@ class CertificateManager:
                 write_file_atomically(output_path, issued.pem.encode())
                 return None
             except AcmeError as e:
-                if isinstance(e, AlreadyReplacedError) and replaces:
+                # Fallbacks that don't count as attempts
+                if replaces and _rejects_replaces(e):
                     self.log(f"{e}; ordering without replaces", "RETRY")
                     replaces = None
                     continue
@@ -490,20 +497,21 @@ class CertificateManager:
                     session.forget_account()
                     account_replaced = True
                     continue
-                if not e.retryable or attempt == max_retries:
+                wait = e.retry_after if e.retry_after is not None else 2**attempt
+                if not e.retryable or attempt >= max_retries or wait > MAX_RETRY_WAIT:
+                    # A long Retry-After is honored by the failure backoff
                     self.log(f"Certificate request failed: {e}", "ERROR", update=True)
                     return RequestFailure(str(e), e.retry_after)
-                wait = min(e.retry_after or 2**attempt, MAX_RETRY_WAIT)
                 self.log(
                     f"Certificate request failed (attempt {attempt}/{max_retries}): "
                     f"{e}; retrying in {wait:.0f}s",
                     "RETRY",
                 )
                 time.sleep(wait)
+                attempt += 1
             except (OSError, ValueError) as e:
                 self.log(f"Certificate request failed: {e}", "ERROR", update=True)
                 return RequestFailure(str(e))
-        return RequestFailure("certificate request failed")
 
     def record_success(
         self, plan: RenewalPlan, cert_path: str, *, profile: str | None = None
@@ -981,3 +989,18 @@ def _discard(*paths: str) -> None:
     for path in paths:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(path)
+
+
+def _rejects_replaces(error: AcmeError) -> bool:
+    """Whether a failed order may be the CA refusing its ``replaces`` field.
+
+    RFC 9773 defines alreadyReplaced; CAs may also answer unauthorized or
+    malformed for a predecessor this account can't replace. Validation
+    failures (ChallengeError) and rate limits are unrelated.
+    """
+    if isinstance(error, AlreadyReplacedError):
+        return True
+    return not isinstance(error, ChallengeError) and error.problem in (
+        "unauthorized",
+        "malformed",
+    )

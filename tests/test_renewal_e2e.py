@@ -20,6 +20,7 @@ import lematt.session
 from lematt.acme import (
     LETS_ENCRYPT_STAGING,
     AccountKey,
+    AcmeError,
     AcmeTransport,
     Http01Solver,
     ServerError,
@@ -415,3 +416,39 @@ def test_replaces_is_only_sent_for_certificates_lematt_issued(monkeypatch, setup
     assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
 
     assert "replaces" not in server.payloads["new-order"][-1]
+
+
+def test_rejected_replaces_falls_back_without_spending_attempts(monkeypatch, setup):
+    base, _, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    calls: list[str | None] = []
+    real = lematt.manager.issue_certificate
+
+    def picky_ca(**kwargs):
+        calls.append(kwargs.get("replaces"))
+        if kwargs.get("replaces"):
+            raise AcmeError("unauthorized", "account did not request that certificate")
+        return real(**kwargs)
+
+    monkeypatch.setattr(lematt.manager, "issue_certificate", picky_ca)
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+    assert calls[0] is not None and calls[1] is None  # per key type: with, then without
+
+
+def test_long_retry_after_is_left_to_the_backoff(monkeypatch, setup):
+    base, _, _ = setup
+    waits: list[float] = []
+    monkeypatch.setattr(lematt.manager.time, "sleep", waits.append)
+
+    def busy_ca(**kwargs):
+        raise ServerError("serverInternal", "busy", retry_after=7200)
+
+    monkeypatch.setattr(lematt.manager, "issue_certificate", busy_ca)
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 1
+
+    assert waits == []  # didn't sleep for two hours inside the run
+    state = StateStore(base / "test" / "state").load_cert("mail.example.org.rsa2048")
+    gap = state.attempts.next_attempt_after - state.attempts.last_failure
+    assert gap == datetime.timedelta(hours=2)
