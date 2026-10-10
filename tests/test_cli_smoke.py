@@ -99,3 +99,14 @@ def test_dry_run_renewal_plans_every_certificate(monkeypatch, conf, capsys):
     # Post-renewal actions are planned per group with placeholders expanded
     assert f"[DRY-RUN] Would run: true {conf}/test/cert/b.org*" in err
     assert "[DRY-RUN] Would run: true\n" in err
+
+
+def test_domain_filter_selects_one_certificate(monkeypatch, conf, capsys):
+    assert (
+        run(monkeypatch, conf, "--status", "--json", "--domain", "mail.example.com")
+        == 0
+    )
+    status = json.loads(capsys.readouterr().out)
+    assert {c["domain"] for c in status["certificates"]} == {"example.com"}
+
+    assert run(monkeypatch, conf, "--status", "--domain", "nope.example") == 1
