@@ -1440,6 +1440,6 @@ Apache 2.0
 
 ## Acknowledgments
 
-- [acme-tiny](https://github.com/diafygi/acme-tiny) - ACME client library
+- [acme-tiny](https://github.com/diafygi/acme-tiny) - the original basis of lematt's ACME client
 - [Let's Encrypt](https://letsencrypt.org/) - Free, automated certificates
 - [loguru](https://github.com/Delgan/loguru) - Beautiful Python logging

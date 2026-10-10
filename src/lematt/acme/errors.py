@@ -103,13 +103,18 @@ _BY_PROBLEM: dict[str, type[AcmeError]] = {
 
 
 def error_from_response(
-    status: int, headers: Mapping[str, str], body: Any
+    status: int, headers: Mapping[str, str], body: Any, request: str = ""
 ) -> AcmeError:
     """Build the most specific AcmeError for an HTTP error response."""
     document = body if isinstance(body, dict) else {}
     problem = str(document.get("type", ""))
     problem = problem.removeprefix(PROBLEM_PREFIX)
-    detail = str(document.get("detail") or body or f"HTTP {status}")
+    detail = str(document.get("detail") or "").strip()
+    if not detail:
+        snippet = str(body or "").strip()[:200]
+        detail = f"{request} returned HTTP {status}".strip()
+        if snippet:
+            detail += f": {snippet}"
     retry_after = parse_retry_after(headers.get("Retry-After"))
 
     cls = _BY_PROBLEM.get(problem)

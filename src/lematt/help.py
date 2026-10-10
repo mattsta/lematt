@@ -252,7 +252,7 @@ them inline. Keys/certificates/CSRs are written below that directory in
 # for every domain lematt requests certificates for
 challengeDropDir: /srv/web/challenges/
 
-# ACME account key (RSA): openssl genrsa 4096 > account.key
+# ACME account key (RSA, or EC P-256/P-384): openssl genrsa 4096 > account.key
 accountKey: /etc/ssl/private/lets-encrypt-account.key.pem
 
 # Renew when a certificate has fewer than this many days left

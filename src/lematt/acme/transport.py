@@ -114,5 +114,7 @@ class AcmeTransport:
                 body: Any = response.json()
             except ValueError:
                 body = response.text
-            raise error_from_response(response.status_code, response.headers, body)
+            raise error_from_response(
+                response.status_code, response.headers, body, f"{method} {url}"
+            )
         return response

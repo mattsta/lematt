@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from lematt.acme import AcmeError, issue_certificate
 from lematt.config import (
     ActionConfig,
     CertificateResult,
@@ -36,9 +37,8 @@ from lematt.log import EVENT
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-
-class CertificateRequestError(Exception):
-    """Raised when certificate request fails after all retries."""
+# Upper bound on waiting before retrying a transient ACME failure
+MAX_RETRY_WAIT = 60.0
 
 
 @dataclass
@@ -203,16 +203,6 @@ class CertificateManager:
     """
 
     config: LemattConfig
-    _acme_module: object | None = field(default=None, repr=False)
-
-    @property
-    def acme(self) -> object:
-        """Lazily load the ACME module."""
-        if self._acme_module is None:
-            from . import acme_tiny
-
-            self._acme_module = acme_tiny
-        return self._acme_module
 
     def log(self, message: str, mode: str = "", update: bool = False) -> None:
         """Log a message with optional mode prefix.
@@ -291,50 +281,48 @@ class CertificateManager:
         max_retries: int = 3,
         domain_context: str = "",
     ) -> bool:
-        """Request a signed certificate from Let's Encrypt.
+        """Request a signed certificate from the ACME server.
+
+        Only transient failures (network errors, 5xx) are retried, waiting
+        for the server's Retry-After when given. Anything else (validation
+        failures, rate limits, bad requests) fails immediately: retrying
+        can't help and would spend Let's Encrypt's failed-validation limit.
 
         Args:
             csr_path: Path to the CSR file.
-            output_path: Path to write the signed certificate.
-            max_retries: Maximum number of retry attempts.
+            output_path: Path to write the signed certificate chain.
+            max_retries: Maximum attempts for transient failures.
             domain_context: Domain context for logging (e.g., "example.com[rsa]").
 
         Returns:
             True if successful, False otherwise.
         """
-        directory = self.config.acme_directory_url
-        last_error: Exception | None = None
-
-        for attempt in range(max_retries):
+        csr_pem = pathlib.Path(csr_path).read_bytes()
+        for attempt in range(1, max_retries + 1):
             try:
-                signed_cert = self.acme.get_crt(
-                    self.config.account_key,
-                    csr_path,
-                    self.config.challenge_dir,
-                    directory_url=directory,
-                    domain_context=domain_context,
+                issued = issue_certificate(
+                    directory_url=self.config.acme_directory_url,
+                    account_key_path=self.config.account_key,
+                    csr_pem=csr_pem,
+                    challenge_dir=self.config.challenge_dir,
+                    context=domain_context,
                 )
-                write_file_atomically(output_path, signed_cert.encode())
+                write_file_atomically(output_path, issued.pem.encode())
                 return True
-            except Exception as e:
-                last_error = e
-                wait_time = 2**attempt
-                if attempt < max_retries - 1:
-                    self.log(
-                        f"Certificate request failed (attempt {attempt + 1}/{max_retries}): {e}",
-                        "RETRY",
-                    )
-                    self.log(f"Retrying in {wait_time} seconds...", "RETRY")
-                    time.sleep(wait_time)
-                else:
-                    self.log(
-                        f"Certificate request failed after {max_retries} attempts: {e}",
-                        "ERROR",
-                        update=True,
-                    )
-
-        self.log(f"FAILED FOR CSR: {csr_path}", "ERROR", update=True)
-        self.log(f"Last error: {last_error}", "ERROR", update=True)
+            except AcmeError as e:
+                if not e.retryable or attempt == max_retries:
+                    self.log(f"Certificate request failed: {e}", "ERROR", update=True)
+                    return False
+                wait = min(e.retry_after or 2**attempt, MAX_RETRY_WAIT)
+                self.log(
+                    f"Certificate request failed (attempt {attempt}/{max_retries}): "
+                    f"{e}; retrying in {wait:.0f}s",
+                    "RETRY",
+                )
+                time.sleep(wait)
+            except (OSError, ValueError) as e:
+                self.log(f"Certificate request failed: {e}", "ERROR", update=True)
+                return False
         return False
 
     def generate_key(
