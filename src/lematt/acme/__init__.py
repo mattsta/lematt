@@ -1,5 +1,6 @@
 """ACME (RFC 8555) client for Let's Encrypt."""
 
+from lematt.acme.ari import RenewalInfo, fetch_renewal_info
 from lematt.acme.client import (
     AcmeClient,
     IssuedCertificate,
@@ -41,7 +42,9 @@ __all__ = [
     "IssuedCertificate",
     "Order",
     "RateLimitedError",
+    "RenewalInfo",
     "ServerError",
     "csr_names",
+    "fetch_renewal_info",
     "issue_certificate",
 ]

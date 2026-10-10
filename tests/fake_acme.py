@@ -99,6 +99,11 @@ class FakeAcmeServer:
     reject_validation: bool = False  # CA-side validation fails
     processing_polls: int = 0  # order stays "processing" this many polls
     retry_after: int = 3  # Retry-After sent while processing
+    ari_retry_after: int = 21600  # Retry-After on renewalInfo responses
+    # ARI window overrides by certificate ID: (start, end, explanationURL)
+    ari_windows: dict[str, tuple[datetime.datetime, datetime.datetime, str | None]] = (
+        field(default_factory=dict)
+    )
 
     # Observations
     requests: list[tuple[str, str]] = field(default_factory=list)
@@ -113,6 +118,8 @@ class FakeAcmeServer:
         self._authz: dict[str, dict[str, Any]] = {}
         self._valid_authz: dict[tuple[str, str], str] = {}  # (kid, name) -> authz id
         self._certs: dict[str, str] = {}
+        self._by_ari_id: dict[str, x509.Certificate] = {}
+        self.replaced: set[str] = set()
         self.ca_key = ec.generate_private_key(ec.SECP256R1())
         self.ca_name = x509.Name(
             [
@@ -199,6 +206,8 @@ class FakeAcmeServer:
             return self._reply(200, directory, nonce=False)
         if path == "/new-nonce":
             return self._reply(200 if request.method == "HEAD" else 204)
+        if path.startswith("/renewal-info/") and request.method == "GET":
+            return self._renewal_info(path.removeprefix("/renewal-info/"))
 
         kid, jwk, payload = self._authenticate(request)
         self.payloads.setdefault(path.split("/")[1], []).append(payload)
@@ -283,6 +292,12 @@ class FakeAcmeServer:
                 "too many new orders recently",
                 self.rate_limit_new_order,
             )
+        if replaces := payload.get("replaces"):
+            if replaces in self.replaced:
+                raise Problem(
+                    409, "alreadyReplaced", f"{replaces} was already replaced"
+                )
+            self.replaced.add(replaces)
         names = [i["value"] for i in payload["identifiers"]]
         authz_urls = []
         for name in names:
@@ -436,6 +451,7 @@ class FakeAcmeServer:
             .sign(self.ca_key, hashes.SHA256())
         )
         self.issued.append(leaf)
+        self._by_ari_id[ari_id(leaf)] = leaf
         self._certs[order_id] = (
             leaf.public_bytes(Encoding.PEM) + ca.public_bytes(Encoding.PEM)
         ).decode()
@@ -445,3 +461,43 @@ class FakeAcmeServer:
             self._order_view(order_id),
             headers={"Location": f"{BASE}/order/{order_id}"},
         )
+
+    def _renewal_info(self, cert_id: str) -> httpx.Response:
+        leaf = self._by_ari_id.get(cert_id)
+        if leaf is None:
+            raise Problem(404, "malformed", f"unknown certificate {cert_id}")
+        start, end, explanation = self.ari_windows.get(cert_id) or self._default_window(
+            leaf
+        )
+        body: dict[str, Any] = {
+            "suggestedWindow": {
+                "start": start.isoformat() + "Z",
+                "end": end.isoformat() + "Z",
+            }
+        }
+        if explanation:
+            body["explanationURL"] = explanation
+        return self._reply(
+            200, body, headers={"Retry-After": str(self.ari_retry_after)}, nonce=False
+        )
+
+    @staticmethod
+    def _default_window(
+        leaf: x509.Certificate,
+    ) -> tuple[datetime.datetime, datetime.datetime, None]:
+        not_before = leaf.not_valid_before_utc.replace(tzinfo=None)
+        not_after = leaf.not_valid_after_utc.replace(tzinfo=None)
+        start = not_after - (not_after - not_before) / 3
+        return (
+            start - datetime.timedelta(days=1),
+            start + datetime.timedelta(days=1),
+            None,
+        )
+
+
+def ari_id(cert: x509.Certificate) -> str:
+    """RFC 9773 certificate ID, computed independently of lematt."""
+    aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+    serial = cert.serial_number
+    der = serial.to_bytes(serial.bit_length() // 8 + 1, "big")
+    return f"{_b64encode(aki.key_identifier)}.{_b64encode(der)}"
