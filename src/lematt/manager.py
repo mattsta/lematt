@@ -35,6 +35,7 @@ from lematt.crypto import (
 )
 from lematt.log import EVENT
 from lematt.renewal import RenewalDecision, backoff_until, decide
+from lematt.session import AcmeSession
 from lematt.state import AttemptState, CertState, IssuedState, StateStore, utcnow
 
 if TYPE_CHECKING:
@@ -323,12 +324,23 @@ class CertificateManager:
         )
         return RenewalPlan(key_type, info, state, decision)
 
+    def new_session(self) -> AcmeSession:
+        """An ACME session for this mode's directory and account."""
+        return AcmeSession(
+            directory_url=self.config.acme_directory_url,
+            account_key_path=self.config.account_key,
+            challenge_dir=self.config.challenge_dir,
+            store=self.store,
+        )
+
     def request_certificate(
         self,
         csr_path: str,
         output_path: str,
         max_retries: int = 3,
         domain_context: str = "",
+        *,
+        session: AcmeSession | None = None,
     ) -> RequestFailure | None:
         """Request a signed certificate from the ACME server.
 
@@ -336,29 +348,40 @@ class CertificateManager:
         for the server's Retry-After when given. Anything else (validation
         failures, rate limits, bad requests) fails immediately: retrying
         can't help and would spend Let's Encrypt's failed-validation limit.
+        A saved account the CA no longer knows is replaced once.
 
         Args:
             csr_path: Path to the CSR file.
             output_path: Path to write the signed certificate chain.
             max_retries: Maximum attempts for transient failures.
             domain_context: Domain context for logging (e.g., "example.com[rsa]").
+            session: ACME session to reuse (a new one by default).
 
         Returns:
             None on success, otherwise what went wrong.
         """
+        session = session or self.new_session()
         csr_pem = pathlib.Path(csr_path).read_bytes()
+        account_replaced = False
         for attempt in range(1, max_retries + 1):
             try:
+                session.ensure_account()
                 issued = issue_certificate(
                     directory_url=self.config.acme_directory_url,
                     account_key_path=self.config.account_key,
                     csr_pem=csr_pem,
                     challenge_dir=self.config.challenge_dir,
                     context=domain_context,
+                    transport=session.transport,
+                    solver=session.solver(),
                 )
                 write_file_atomically(output_path, issued.pem.encode())
                 return None
             except AcmeError as e:
+                if e.problem == "accountDoesNotExist" and not account_replaced:
+                    session.forget_account()
+                    account_replaced = True
+                    continue
                 if not e.retryable or attempt == max_retries:
                     self.log(f"Certificate request failed: {e}", "ERROR", update=True)
                     return RequestFailure(str(e), e.retry_after)
@@ -535,6 +558,7 @@ class CertificateManager:
                 self.process_domain(domain_config, p.key_type, plan=p) for p in plans
             ]
 
+        session = self.new_session()
         prepare_runner = PrepareActionRunner(self.config)
         prepared_processes: list[subprocess.Popen] = []
         try:
@@ -544,7 +568,8 @@ class CertificateManager:
                 prepared_processes.extend(procs)
 
             return [
-                self.process_domain(domain_config, p.key_type, plan=p) for p in plans
+                self.process_domain(domain_config, p.key_type, plan=p, session=session)
+                for p in plans
             ]
         finally:
             prepare_runner.cleanup(prepared_processes)
@@ -555,6 +580,7 @@ class CertificateManager:
         key_type: KeyType,
         *,
         plan: RenewalPlan | None = None,
+        session: AcmeSession | None = None,
     ) -> CertificateResult:
         """Renew one certificate if its plan says so.
 
@@ -565,6 +591,7 @@ class CertificateManager:
             domain_config: The domain configuration.
             key_type: Type of key (RSA or EC).
             plan: The renewal decision (computed now if not given).
+            session: ACME session shared with the domain's other key types.
 
         Returns:
             CertificateResult with the operation outcome.
@@ -627,7 +654,10 @@ class CertificateManager:
             return result(success=False, renewed=True, error="CSR generation failed")
 
         failure = self.request_certificate(
-            csr, cert, domain_context=f"{domain_config.primary_domain}[{key_type}]"
+            csr,
+            cert,
+            domain_context=f"{domain_config.primary_domain}[{key_type}]",
+            session=session,
         )
         if failure is not None:
             self.record_failure(plan, failure)

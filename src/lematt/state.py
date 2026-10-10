@@ -231,6 +231,10 @@ class StateStore:
         data["schema"] = SCHEMA_VERSION
         self._write_json(self.root / "account.json", data)
 
+    def forget_account(self) -> None:
+        if not self.read_only:
+            (self.root / "account.json").unlink(missing_ok=True)
+
     # -- certificates -----------------------------------------------------
 
     def cert_path(self, cert_id: str) -> Path:

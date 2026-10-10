@@ -15,8 +15,14 @@ from cryptography.hazmat.primitives.serialization import (
 from fake_acme import DIRECTORY_URL, FakeAcmeServer, ari_id
 
 import lematt.manager
-from lematt.acme import AccountKey, AcmeTransport, Http01Solver, ServerError
-from lematt.acme import issue_certificate as real_issue_certificate
+import lematt.session
+from lematt.acme import (
+    LETS_ENCRYPT_STAGING,
+    AccountKey,
+    AcmeTransport,
+    Http01Solver,
+    ServerError,
+)
 from lematt.acme.errors import ChallengeError
 from lematt.cli import main
 from lematt.state import StateStore
@@ -43,17 +49,18 @@ def setup(tmp_path, monkeypatch):
     )
     server = FakeAcmeServer(challenge_dir=challenges)
 
-    def issue_via_fake(**kwargs):
-        kwargs["directory_url"] = DIRECTORY_URL
-        kwargs["transport"] = AcmeTransport(
-            kwargs["directory_url"],
-            AccountKey.from_file(kwargs["account_key_path"]),
-            client=server.http_client(),
-        )
-        kwargs["solver"] = Http01Solver(challenges, client=server.http_client())
-        return real_issue_certificate(**kwargs)
-
-    monkeypatch.setattr(lematt.manager, "issue_certificate", issue_via_fake)
+    # Route lematt's ACME session to the fake CA (whatever directory the
+    # config selects) and serve challenges from the fake web server
+    monkeypatch.setattr(
+        lematt.session,
+        "make_transport",
+        lambda url, key: AcmeTransport(DIRECTORY_URL, key, client=server.http_client()),
+    )
+    monkeypatch.setattr(
+        lematt.session,
+        "make_solver",
+        lambda challenge_dir: Http01Solver(challenges, client=server.http_client()),
+    )
     return tmp_path, server, log
 
 
@@ -86,7 +93,7 @@ def test_renewal_issues_links_and_deploys(monkeypatch, setup, capsys):
     assert len(server.issued) == 4  # 2 certificates x (RSA + EC)
     # http-01 validated once per name; the EC orders reused the authorizations
     assert server.count("POST", "/challenge") == 3
-    assert server.count("POST", "/new-account") == 4  # once per issuance
+    assert server.count("POST", "/new-account") == 1  # saved and reused
 
     lines = log.read_text().splitlines()
     assert sorted(lines[-1].split()[1:]) == ["example.com", "mail.example.org"]
@@ -148,7 +155,14 @@ def test_state_and_history_track_issuance(monkeypatch, setup, capsys):
     assert state.issued.serial == f"{leaf.serial_number:x}"
     assert state.issued.ari_id == ari_id(leaf)
     assert state.attempts.consecutive_failures == 0
-    assert [e["event"] for e in store.history()] == ["issued", "issued"]
+    assert [e["event"] for e in store.history()] == [
+        "account_registered",
+        "issued",
+        "issued",
+    ]
+    thumbprint = AccountKey.from_file(base / "account.key").thumbprint
+    account = store.load_account(LETS_ENCRYPT_STAGING, thumbprint)
+    assert account.account_url.startswith("https://acme.test/acct/")
 
     assert (
         run(monkeypatch, base, "--status", "--json", "--domain", "mail.example.org")
@@ -182,3 +196,15 @@ def test_failures_back_off_until_forced(monkeypatch, setup):
     assert (
         store.load_cert("mail.example.org.rsa2048").attempts.consecutive_failures == 0
     )
+
+
+def test_unknown_saved_account_is_replaced(monkeypatch, setup):
+    base, server, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    server._accounts.clear()  # e.g. the staging environment was reset
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+
+    assert server.count("POST", "/new-account") == 2
+    events = [e["event"] for e in StateStore(base / "test" / "state").history()]
+    assert events.count("account_registered") == 2
