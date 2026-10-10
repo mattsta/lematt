@@ -25,6 +25,7 @@ from lematt.config import (
     RenewalSummary,
     WorkerResult,
 )
+from lematt.log import setup_logging
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -198,13 +199,17 @@ class WorkItem:
         return f"{self.domain_config.primary_domain}:{self.key_type}"
 
 
-def _worker_init() -> None:
-    """Initialize worker processes to ignore SIGINT.
+def _worker_init(config: LemattConfig) -> None:
+    """Initialize worker processes: logging like the parent, ignore SIGINT.
+
+    Workers start fresh (forkserver/spawn) with no log handlers, so without
+    this their renewal progress and ACME errors would be silently dropped.
 
     Worker processes should ignore SIGINT (Ctrl-C) since the parent
     process handles shutdown coordination. This prevents ugly tracebacks
     from worker processes when the user interrupts the program.
     """
+    setup_logging(verbose=config.verbose, cron=config.is_cron, test_mode=config.is_test)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
@@ -554,7 +559,9 @@ class CertificateExecutor:
 
         try:
             with ProcessPoolExecutor(
-                max_workers=self.max_workers, initializer=_worker_init
+                max_workers=self.max_workers,
+                initializer=_worker_init,
+                initargs=(self.config,),
             ) as executor:
                 # Store executor reference for forced shutdown
                 self._executor = executor

@@ -11,8 +11,13 @@ from loguru import logger
 # Remove default handler - we'll configure our own
 logger.remove()
 
+# Something actually happened (renewal, link, failure). Sits between INFO and
+# SUCCESS so cron mode can show events while hiding routine progress.
+EVENT = "EVENT"
+logger.level(EVENT, no=22, color="<bold>")
+
 # Export the configured logger
-__all__ = ["logger", "setup_logging"]
+__all__ = ["EVENT", "logger", "setup_logging"]
 
 
 def setup_logging(
@@ -25,7 +30,7 @@ def setup_logging(
 
     Args:
         verbose: Enable debug-level logging.
-        cron: Minimize output (only warnings and errors).
+        cron: Only output events (renewals, failures), warnings, and errors.
         test_mode: Add [TEST] prefix to all messages.
     """
     # Remove any existing handlers
@@ -33,7 +38,7 @@ def setup_logging(
 
     # Determine log level
     if cron:
-        level = "WARNING"
+        level = EVENT
     elif verbose:
         level = "DEBUG"
     else:

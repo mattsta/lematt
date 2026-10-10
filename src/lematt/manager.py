@@ -27,6 +27,7 @@ from lematt.config import (
     RenewalSummary,
 )
 from lematt.crypto import HAS_CRYPTOGRAPHY, get_certificate_info
+from lematt.log import EVENT
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -229,7 +230,7 @@ class CertificateManager:
         elif mode in ("WARN", "WARNING"):
             logger.warning(full_message)
         elif update:
-            logger.info(full_message)
+            logger.log(EVENT, full_message)
         else:
             logger.debug(full_message)
 
@@ -484,6 +485,22 @@ subjectAltName={san_config}"""
         """
         if key_types is None:
             key_types = [KeyType.RSA, KeyType.EC]
+
+        # Prepare actions (e.g. remote challenge forwarders) are only needed
+        # when a certificate will actually be requested
+        utcnow = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+        if not self.config.force_renew and not any(
+            self.cert_needs_renewal(
+                self.config.get_cert_path(domain_config, key_type), utcnow
+            )
+            for key_type in key_types
+        ):
+            return [
+                self.process_domain(
+                    domain_config, key_type, domain_actions, skip_prepare=True
+                )
+                for key_type in key_types
+            ]
 
         results: list[CertificateResult] = []
 

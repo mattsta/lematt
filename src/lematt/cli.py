@@ -16,9 +16,9 @@ from pathlib import Path
 from loguru import logger
 
 from lematt.actions import ActionRunner
-from lematt.config import DomainConfig, LemattConfig
+from lematt.config import DomainConfig, LemattConfig, RenewalSummary
 from lematt.executor import CertificateExecutor, create_progress_printer
-from lematt.log import setup_logging
+from lematt.log import EVENT, setup_logging
 from lematt.manager import CertificateManager
 
 # Global action runner for emergency cleanup
@@ -212,6 +212,23 @@ def validate_config(
         sys.exit(1)
 
     return True
+
+
+def finish_report(summary: RenewalSummary, *, interrupted: bool = False) -> int:
+    """Log the final run summary and return the process exit code.
+
+    The summary is an EVENT (shown in cron mode) only when something was
+    renewed or failed, so cron runs with nothing due stay silent.
+    """
+    changed = summary.renewed_count > 0 or summary.failed_count > 0
+    logger.log(
+        EVENT if changed else "INFO",
+        f"{'Interrupted - Partial results' if interrupted else 'Completed'}: "
+        f"{summary.total_domains} certificates - "
+        f"Renewed: {summary.renewed_count}, Failed: {summary.failed_count}, "
+        f"Skipped: {summary.skipped_count}",
+    )
+    return 1 if summary.failed_count > 0 else 0
 
 
 def main() -> int:
@@ -1050,13 +1067,7 @@ def main() -> int:
         interrupted = True
         summary = executor._summary
 
-    # Log final summary
-    logger.info(
-        f"{'Interrupted - Partial results' if interrupted else 'Completed'}: "
-        f"{summary.total_domains} certificates - "
-        f"Renewed: {summary.renewed_count}, Failed: {summary.failed_count}, "
-        f"Skipped: {summary.skipped_count}"
-    )
+    exit_code = finish_report(summary, interrupted=interrupted)
 
     # CRITICAL: Process updated certificates (run after-issue hooks)
     # This must run even if interrupted to ensure successful renewals are deployed
@@ -1080,7 +1091,7 @@ def main() -> int:
         logger.warning("Exiting due to interrupt - after-issue hooks completed")
         sys.exit(130)  # Standard exit code for SIGINT
 
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

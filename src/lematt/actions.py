@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from lematt.config import ActionConfig, CertificateResult, DomainActions, LemattConfig
+from lematt.log import EVENT
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -55,7 +56,7 @@ class ActionRunner:
         elif mode in ("WARN", "WARNING"):
             logger.warning(full_message)
         elif update:
-            logger.info(full_message)
+            logger.log(EVENT, full_message)
         else:
             logger.debug(full_message)
 
