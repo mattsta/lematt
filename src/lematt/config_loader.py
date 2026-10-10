@@ -31,6 +31,7 @@ from lematt.config import (
     LemattConfig,
     drop_obsolete_domain_flags,
     warn_obsolete_config_keys,
+    warn_unknown_keys,
 )
 
 MAX_NAMES_PER_CERTIFICATE = 100
@@ -44,6 +45,24 @@ SUPPORTED_CURVES = ("prime256v1", "secp256r1", "secp384r1")
 
 # Sections with fixed meaning in actions configuration
 RESERVED_ACTION_SECTIONS = ("default", "every")
+
+# Keys lematt reads (anything else is warned about and ignored)
+TOML_TABLES = ("config", "domains", "actions", "notifications")
+TOML_DOMAIN_KEYS = ("primary", "sans", "profile")
+TOML_ACTION_KEYS = ("domains", "prepare", "upload_certs", "upload_keys", "update")
+INI_ACTION_KEYS = ("domains", "prepare", "uploadCerts", "uploadKeys", "update")
+INI_CONFIG_KEYS = (
+    "challengeDropDir",
+    "accountKey",
+    "reauthorizeDays",
+    "generateNewCertsAfterDays",
+    "alwaysGenerateNewKeys",
+    "keyBitsRSA",
+    "curve",
+    "rsaTag",
+    "curveTag",
+    "profile",
+)
 
 INI_DEFAULTS = {
     "keyBitsRSA": "2048",
@@ -155,6 +174,12 @@ def domains_from_toml(entries: Iterable[dict[str, Any]]) -> list[DomainConfig]:
         if not primary:
             raise ConfigError(f"{where}: missing 'primary'")
         warn_obsolete_config_keys(entry, f"lematt.toml [[domains]] {primary}")
+        warn_unknown_keys(
+            entry,
+            TOML_DOMAIN_KEYS,
+            f"lematt.toml [[domains]] {primary}",
+            ignore_case=False,
+        )
         profile = check_profile(entry.get("profile"), where)
         domains.append(
             make_domain_config(
@@ -187,6 +212,12 @@ def _add_action_section(
     if not action.domains:
         raise ConfigError(f"{where}: missing 'domains' (which domains it applies to)")
     for domain in action.domains:
+        previous = result.domain_configs.get(domain)
+        if previous is not None and previous.name != action.name:
+            logger.warning(
+                f"{where}: {domain} is also listed in [{previous.name}]; "
+                f"[{action.name}] applies to it"
+            )
         result.domain_configs[domain] = action
 
 
@@ -215,6 +246,7 @@ def load_actions_ini(path: Path) -> DomainActions:
         values = parser[section]
         where = f"{path.name} [{section}]"
         warn_obsolete_config_keys(values, where)
+        warn_unknown_keys(values, INI_ACTION_KEYS, where, ignore_case=True)
         action = ActionConfig(
             name=section,
             prepare_commands=_ini_commands(values, "prepare", where),
@@ -234,6 +266,7 @@ def actions_from_toml(tables: dict[str, dict[str, Any]]) -> DomainActions:
     for name, table in tables.items():
         where = f"lematt.toml [actions.{name}]"
         warn_obsolete_config_keys(table, where)
+        warn_unknown_keys(table, TOML_ACTION_KEYS, where, ignore_case=False)
         action = ActionConfig(
             name=name,
             prepare_commands=_string_list(table.get("prepare", []), f"{where} prepare"),
@@ -248,6 +281,28 @@ def actions_from_toml(tables: dict[str, dict[str, Any]]) -> DomainActions:
         )
         _add_action_section(result, action, where)
     return result
+
+
+def action_group_overlaps(
+    domains: Iterable[DomainConfig], actions: DomainActions
+) -> list[str]:
+    """Warnings for certificates whose names fall into several action groups.
+
+    Groups match per name and each deploys the whole certificate, so such a
+    certificate is uploaded and its services reloaded once per group.
+    """
+    warnings = []
+    for domain in domains:
+        groups = list(
+            dict.fromkeys(actions.get_for_domain(n).name for n in domain.all_domains)
+        )
+        if len(groups) > 1:
+            warnings.append(
+                f"certificate {domain.primary_domain}: its names fall into action "
+                f"groups {', '.join(groups)}, and each deploys the whole "
+                "certificate; list all of its names in one group"
+            )
+    return warnings
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +333,7 @@ class ConfigLoader:
         update = ["systemctl reload nginx"]
 
         [actions.webservers]
-        domains = ["example.com"]
+        domains = ["example.com", "www.example.com", "mail.example.com"]
         upload_certs = ["rsync -avz CERTS /etc/ssl/certs/"]
     """
 
@@ -354,11 +409,17 @@ class ConfigLoader:
         except tomllib.TOMLDecodeError as e:
             raise ConfigError(f"{path}: {e}") from e
 
-        for key, value in self._config_data.get("config", {}).items():
+        warn_unknown_keys(self._config_data, TOML_TABLES, str(path), ignore_case=False)
+        settings = self._config_data.get("config", {})
+        warn_obsolete_config_keys(settings, f"{path} [config]")
+        warn_unknown_keys(
+            settings, TOML_SETTING_TYPES, f"{path} [config]", ignore_case=False
+        )
+        for key, value in settings.items():
             expected = TOML_SETTING_TYPES.get(key)
             if expected is None:
-                logger.warning(f"{path}: ignoring unknown [config] key '{key}'")
-            elif not isinstance(value, expected) or isinstance(value, bool) != (
+                continue
+            if not isinstance(value, expected) or isinstance(value, bool) != (
                 expected is bool
             ):
                 raise ConfigError(
@@ -376,6 +437,8 @@ class ConfigLoader:
             raise ConfigError(f"{path}: missing [config] section")
 
         config = parser["config"]
+        warn_obsolete_config_keys(config, f"{path} [config]")
+        warn_unknown_keys(config, INI_CONFIG_KEYS, f"{path} [config]", ignore_case=True)
 
         def number[T: (int, float)](key: str, kind: type[T]) -> T:
             try:
@@ -578,8 +641,8 @@ update = [
 ]
 
 [actions.webservers]
-# Domains using this action group
-domains = ["example.com"]
+# Names using this action group (list every name of a certificate)
+domains = ["example.com", "www.example.com", "mail.example.com"]
 # Upload certificates to remote servers
 upload_certs = [
     "rsync -avz CERTS user@webserver:/etc/ssl/certs/",

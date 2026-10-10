@@ -7,6 +7,8 @@ import sys
 import pytest
 
 from lematt.cli import main
+from lematt.config import KeyType
+from lematt.crypto import generate_private_key
 
 
 @pytest.fixture
@@ -54,7 +56,54 @@ def test_status_json_reports_missing_certificates(monkeypatch, conf, capsys):
 
 
 def test_validate_config(monkeypatch, conf):
+    (conf / "account.key").write_bytes(generate_private_key(KeyType.EC))
     assert run(monkeypatch, conf, "--validate-config") == 0
+
+
+@pytest.mark.parametrize(
+    ("breakage", "message"),
+    [
+        ("no account key", "Account key doesn't exist"),
+        ("bad account key", "Account key can't be used"),
+        ("no challenge directory", "Challenge directory does not exist"),
+    ],
+)
+def test_validate_config_checks_what_a_run_needs(
+    monkeypatch, conf, capsys, breakage, message
+):
+    (conf / "account.key").write_bytes(generate_private_key(KeyType.EC))
+    if breakage == "no account key":
+        (conf / "account.key").unlink()
+    elif breakage == "bad account key":
+        (conf / "account.key").write_text("not a key")
+    else:
+        (conf / "challenges").rmdir()
+
+    assert run(monkeypatch, conf, "--validate-config") == 1
+    assert message in capsys.readouterr().err
+
+
+def test_config_warns_about_unknown_keys_and_split_certificates(
+    monkeypatch, conf, capsys
+):
+    with (conf / "lematt.conf").open("a") as f:
+        f.write("keyBitsRsa2: 4096\n")
+    (conf / "actions.conf").write_text(
+        '[default]\nupdate: ["true"]\nupdateCerts: ["true"]\n'
+        "[mail]\ndomains: mail.example.com b.org\n"
+        "[b]\ndomains: b.org\n"
+    )
+
+    assert run(monkeypatch, conf, "--list-domains") == 0
+
+    err = capsys.readouterr().err
+    assert "ignoring unknown key 'keybitsrsa2' (did you mean 'keyBitsRSA'?)" in err
+    assert "ignoring unknown key 'updatecerts' (did you mean 'uploadCerts'?)" in err
+    assert "b.org is also listed in [mail]; [b] applies to it" in err
+    assert (
+        "certificate example.com: its names fall into action groups default, mail"
+        in err
+    )
 
 
 def test_health_check_outputs(monkeypatch, conf, capsys):

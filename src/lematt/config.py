@@ -5,6 +5,7 @@ for certificate management operations.
 """
 
 import datetime
+import difflib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -42,6 +43,29 @@ def warn_obsolete_config_keys(keys: Iterable[str], where: str) -> None:
     for key in sorted(OBSOLETE_CONFIG_KEYS):
         if key.lower() in present:
             _warn_obsolete(key, where)
+
+
+def warn_unknown_keys(
+    keys: Iterable[str], known: Iterable[str], where: str, *, ignore_case: bool
+) -> None:
+    """Warn about keys lematt doesn't read, suggesting the closest known key.
+
+    Obsolete keys are left to warn_obsolete_config_keys. Use
+    ``ignore_case=True`` for INI files (configparser lowercases option
+    names); TOML keys must match exactly.
+    """
+
+    def fold(key: str) -> str:
+        return key.lower() if ignore_case else key
+
+    canonical = {fold(key): key for key in known}
+    obsolete = {key.lower() for key in OBSOLETE_CONFIG_KEYS}
+    for key in keys:
+        if fold(key) in canonical or key.lower() in obsolete:
+            continue
+        close = difflib.get_close_matches(fold(key), canonical, n=1)
+        hint = f" (did you mean '{canonical[close[0]]}'?)" if close else ""
+        logger.warning(f"{where}: ignoring unknown key '{key}'{hint}")
 
 
 class KeyType(Enum):

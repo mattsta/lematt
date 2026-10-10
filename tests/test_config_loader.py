@@ -6,7 +6,9 @@ import sys
 import pytest
 
 from lematt.cli import main
+from lematt.config import KeyType
 from lematt.config_loader import ConfigError, ConfigLoader
+from lematt.crypto import generate_private_key
 
 INI = """[config]
 challengeDropDir: {base}/challenges
@@ -35,7 +37,7 @@ upload_certs = ["rsync CERTS backup:"]
 
 [actions.mail]
 domains = ["mail.example.org"]
-prepare = ["ssh mail-forward"]
+prepare = ["ssh -tt forwarder.example.net"]
 """
 
 
@@ -62,7 +64,7 @@ def ini_dir(tmp_path):
         "actions.conf",
         '[default]\nupdate: ["systemctl reload nginx"]\n'
         '[every]\nuploadCerts: ["rsync CERTS backup:"]\n'
-        '[mail]\ndomains: mail.example.org\nprepare: ["ssh mail-forward"]\n',
+        '[mail]\ndomains: mail.example.org\nprepare: ["ssh -tt forwarder.example.net"]\n',
     )
     return tmp_path
 
@@ -90,7 +92,7 @@ EXPECTED = (
     [["example.com", "www.example.com", "mail.example.org"]],
     ["systemctl reload nginx"],
     ["rsync CERTS backup:"],
-    ["ssh mail-forward"],
+    ["ssh -tt forwarder.example.net"],
 )
 
 
@@ -115,6 +117,7 @@ def test_cli_accepts_toml_config(monkeypatch, tmp_path, capsys):
         "www.example.com",
         "mail.example.org",
     ]
+    (tmp_path / "account.key").write_bytes(generate_private_key(KeyType.EC))
     assert cli(monkeypatch, config, "--validate-config") == 0
 
 

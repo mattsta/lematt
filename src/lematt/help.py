@@ -268,8 +268,10 @@ certificate status and health information.
         content="""
 # Configuration Commands
 
-- `--validate-config`: Validate the configuration (settings, domains and
-  actions), then print a summary and exit
+- `--validate-config`: Check everything a run reads (settings, domains,
+  actions, the challenge directory and the account key), then print a
+  summary; unknown keys and certificates spanning action groups are warned
+  about
 - `--list-domains`: Print the configured certificates and exit
 - `--init-toml`: Write an example `lematt.toml` next to `--config`
 - `--caa-records`: Print CAA DNS records limiting issuance to Let's

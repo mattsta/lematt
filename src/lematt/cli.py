@@ -26,7 +26,7 @@ from lematt.config import (
     LemattConfig,
     RenewalSummary,
 )
-from lematt.config_loader import ConfigError, ConfigLoader
+from lematt.config_loader import ConfigError, ConfigLoader, action_group_overlaps
 from lematt.crypto import get_certificate_info
 from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import EVENT, setup_logging
@@ -117,10 +117,13 @@ def load_context(
         verbose=args.verbose,
     )
     try:
-        return Context(args, loader, config, loader.get_domains(), loader.get_actions())
+        domains, actions = loader.get_domains(), loader.get_actions()
     except ConfigError as e:
         logger.error(f"Config error: {e}")
         return None
+    for warning in action_group_overlaps(domains, actions):
+        logger.warning(f"Config warning: {warning}")
+    return Context(args, loader, config, domains, actions)
 
 
 def finish_report(summary: RenewalSummary, *, interrupted: bool = False) -> int:
@@ -539,7 +542,24 @@ def cmd_systemd(args: argparse.Namespace) -> int:
 
 
 def cmd_validate(ctx: Context) -> int:
-    """--validate-config: summarize the (already validated) configuration."""
+    """--validate-config: check what a run needs, then summarize the configuration.
+
+    Settings, domains, actions and the challenge directory were validated
+    while loading; this adds the account key, which only runs read.
+    """
+    from lematt.acme import AccountKey
+
+    key_path = ctx.config.account_key
+    try:
+        AccountKey.from_file(key_path)
+    except FileNotFoundError:
+        logger.error(f"Config error: Account key doesn't exist: {key_path}")
+        logger.error(f"  Create it with: openssl genrsa 4096 > {key_path}")
+        return 1
+    except (OSError, ValueError, TypeError) as e:
+        logger.error(f"Config error: Account key can't be used: {key_path}: {e}")
+        return 1
+
     logger.info("Configuration is valid!")
     logger.info(f"  Config base: {ctx.config.config_base}")
     logger.info(f"  Challenge dir: {ctx.config.challenge_dir}")
@@ -1013,9 +1033,10 @@ STANDALONE_COMMANDS: list[tuple[Predicate, Callable[[argparse.Namespace], int]]]
     ),
 ]
 
-# (selected?, command, read-only: doesn't need the challenge directory)
+# (selected?, command, read-only: doesn't need the challenge directory;
+#  --validate-config checks it like a run would)
 CONFIGURED_COMMANDS: list[tuple[Predicate, Callable[[Context], int], bool]] = [
-    (lambda a: a.validate_only, cmd_validate, True),
+    (lambda a: a.validate_only, cmd_validate, False),
     (lambda a: a.list_domains, cmd_list_domains, True),
     (lambda a: a.health_check, cmd_health, True),
     (lambda a: a.dashboard, cmd_dashboard, True),

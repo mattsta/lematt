@@ -17,6 +17,8 @@ from urllib.request import Request, urlopen
 
 from loguru import logger
 
+from lematt.config import warn_unknown_keys
+
 
 @dataclass
 class NotificationEvent:
@@ -524,8 +526,7 @@ class NotificationConfig:
     def from_settings(cls, settings: dict[str, object]) -> NotificationConfig:
         """Build from a TOML [notifications] table; unknown keys are warned about."""
         known = set(cls.__dataclass_fields__)
-        for key in sorted(set(settings) - known):
-            logger.warning(f"[notifications]: ignoring unknown key '{key}'")
+        warn_unknown_keys(settings, known, "[notifications]", ignore_case=False)
         return cls(**{k: v for k, v in settings.items() if k in known})  # type: ignore[arg-type]
 
     def create_manager(self) -> NotificationManager:

@@ -287,8 +287,13 @@ email_to = "admin@example.com"
 | `rsa_tag`                       | string | "rsa{bits}"  | Filename tag for RSA files                  |
 | `curve_tag`                     | string | "{curve}"    | Filename tag for EC files                   |
 
-`challenge_dir` must exist for runs, `--revoke` and `--test-notification`;
-read-only commands don't need it. Unknown keys are warned about.
+`challenge_dir` must exist for runs, `--revoke` and `--validate-config`;
+read-only commands don't need it.
+
+Unknown keys anywhere in the configuration (TOML tables, INI sections,
+domains entries, action groups, notifications) are ignored with a
+warning that suggests the closest known key, so a typo like
+`uploadCerts` in TOML doesn't silently disable an upload.
 
 #### `[[domains]]`
 
@@ -384,7 +389,8 @@ update: ["ssh mail.example.net sudo systemctl reload postfix"]
 | `uploadCerts` / `uploadKeys`   | `upload_certs` / `upload_keys`                                  |
 | `prepare`, `update`            | `prepare`, `update`                                             |
 
-TOML action keys must use the snake_case names; others are ignored.
+TOML action keys must use the snake_case names; others are warned about
+and ignored.
 
 ---
 
@@ -400,8 +406,9 @@ TOML action keys must use the snake_case names; others are ignored.
 
 Groups match per name, SANs included. A certificate whose names fall into
 two groups is deployed by both (each with the whole certificate), so keep
-a certificate's names in one group. A name listed in several groups
-belongs to the last one.
+a certificate's names in one group; lematt warns about certificates that
+span groups. A name listed in several groups belongs to the last one,
+also with a warning.
 
 ### When They Run
 
@@ -489,8 +496,9 @@ uv run lematt --prod --validate-config        # check settings, domains and acti
 uv run lematt --prod --caa-records            # CAA records for your names
 ```
 
-`--validate-config` checks the configuration itself; missing challenge
-directories or account keys show up on the first run.
+`--validate-config` checks everything a run reads before contacting the
+CA: settings, domains, action groups, that the challenge directory
+exists, and that the account key loads. It exits 1 on any error.
 
 ```
 Domain                    Expires      Days Left  Renews                Status
