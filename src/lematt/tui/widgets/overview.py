@@ -4,6 +4,7 @@ from rich.console import RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.containers import Container, Vertical
 from textual.reactive import reactive
 from textual.widgets import Static
@@ -22,7 +23,7 @@ class OverviewPanel(Container):
 
     health_data: reactive[SystemHealth | None] = reactive(None)
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         """Compose the overview panel layout."""
         yield Vertical(
             HealthSummaryWidget(id="health-summary"),

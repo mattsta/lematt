@@ -194,7 +194,7 @@ class WebhookBackend(NotificationBackend):
                 method="POST",
             )
             with urlopen(req, timeout=30) as response:
-                return response.status < 400
+                return bool(response.status < 400)
         except URLError as e:
             logger.warning(f"Webhook send failed: {e}")
             return False
@@ -310,7 +310,7 @@ class PagerDutyBackend(NotificationBackend):
                 method="POST",
             )
             with urlopen(req, timeout=30) as response:
-                return response.status < 400
+                return bool(response.status < 400)
         except URLError as e:
             logger.warning(f"PagerDuty send failed: {e}")
             return False
@@ -352,7 +352,7 @@ class NtfyBackend(NotificationBackend):
                 url, data=body.encode("utf-8"), headers=headers, method="POST"
             )
             with urlopen(req, timeout=30) as response:
-                return response.status < 400
+                return bool(response.status < 400)
         except URLError as e:
             logger.warning(f"Ntfy send failed: {e}")
             return False

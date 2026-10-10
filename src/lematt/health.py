@@ -14,6 +14,7 @@ import ssl
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
+from typing import cast
 
 from loguru import logger
 
@@ -202,7 +203,7 @@ class HealthChecker:
                 )
 
             # Parse expiry
-            not_after_str = cert.get("notAfter", "")
+            not_after_str = str(cert.get("notAfter", ""))
             try:
                 not_after = datetime.datetime.strptime(
                     not_after_str, "%b %d %H:%M:%S %Y %Z"
@@ -216,7 +217,9 @@ class HealthChecker:
                 )
 
             # Get issuer
-            issuer_parts = cert.get("issuer", ())
+            issuer_parts = cast(
+                "tuple[tuple[tuple[str, str], ...], ...]", cert.get("issuer", ())
+            )
             issuer = None
             for part in issuer_parts:
                 for key, value in part:

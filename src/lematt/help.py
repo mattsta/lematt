@@ -8,7 +8,7 @@ and interactive help browsing.
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -611,7 +611,7 @@ class HelpRenderer:
 
     def render_topic(self, topic: HelpTopic) -> Panel:
         """Render a help topic as a panel."""
-        content_parts = []
+        content_parts: list[RenderableType] = []
 
         # Summary
         content_parts.append(Text(topic.summary, style="italic cyan"))

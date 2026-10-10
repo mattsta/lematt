@@ -11,6 +11,7 @@ from textual.app import App
 from textual.binding import Binding, BindingType
 from textual.reactive import reactive
 from textual.screen import Screen
+from textual.timer import Timer
 
 from lematt.config import DomainConfig
 from lematt.health import HealthChecker, SystemHealth
@@ -90,7 +91,7 @@ class LemattDashboardApp(App[None]):
         health_checker: HealthChecker,
         domains: list[DomainConfig],
         config: DashboardConfig | None = None,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> None:
         """Initialize the dashboard application.
 
@@ -105,7 +106,7 @@ class LemattDashboardApp(App[None]):
         self.domains = domains
         self.config = config or DashboardConfig()
 
-        self._refresh_timer = None
+        self._refresh_timer: Timer | None = None
 
     async def on_mount(self) -> None:
         """Set up the dashboard when the app starts."""
@@ -265,7 +266,7 @@ class LemattDashboardApp(App[None]):
         if not self.is_paused:
             self.run_worker(self._refresh_data())
 
-    def action_quit(self) -> None:
+    async def action_quit(self) -> None:
         """Quit the application."""
         self._add_log("Shutting down dashboard...")
         self.exit()

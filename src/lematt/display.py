@@ -135,7 +135,7 @@ def create_certificate_table(
 
         # Format status with icon and color
         icon = StatusStyle.get_icon(status) if config.show_icons else ""
-        style = StatusStyle.get_style(status) if config.show_colors else None
+        style = StatusStyle.get_style(status) if config.show_colors else ""
         status_text = Text(f"{icon} {status}", style=style)
 
         # Format days with color coding

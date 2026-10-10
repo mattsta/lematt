@@ -1,7 +1,7 @@
 """Dashboard log viewer widget for activity logs."""
 
 from datetime import datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from textual.binding import Binding, BindingType
 from textual.reactive import reactive
@@ -32,7 +32,7 @@ class LogViewer(RichLog):
         self,
         max_lines: int = 100,
         auto_scroll: bool = True,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> None:
         """Initialize the log viewer.
 

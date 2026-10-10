@@ -1,8 +1,9 @@
 """Interactive table widgets for displaying certificates and health data."""
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Container
 from textual.message import Message
@@ -50,7 +51,7 @@ class CertificateTable(Container):
             super().__init__()
             self.certificate = certificate
 
-    def __init__(self, compact_mode: bool = False, **kwargs: object) -> None:
+    def __init__(self, compact_mode: bool = False, **kwargs: Any) -> None:
         """Initialize the certificate table.
 
         Args:
@@ -61,7 +62,7 @@ class CertificateTable(Container):
         self.certificates = []
         self.compact_mode = compact_mode
 
-    def compose(self) -> None:
+    def compose(self) -> ComposeResult:
         """Compose the table layout with data table."""
         yield DataTable(id="cert-table", cursor_type="row")
 
@@ -238,7 +239,7 @@ class HealthTable(DataTable):
             super().__init__()
             self.certificate = certificate
 
-    def __init__(self, **kwargs: object) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the health table.
 
         Args:

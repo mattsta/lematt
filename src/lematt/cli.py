@@ -802,7 +802,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if selected(args):
             return standalone(args)
 
-    command, read_only = cmd_renew, False
+    command: Callable[[Context], int] = cmd_renew
+    read_only = False
     for selected, configured, is_read_only in CONFIGURED_COMMANDS:
         if selected(args):
             command, read_only = configured, is_read_only

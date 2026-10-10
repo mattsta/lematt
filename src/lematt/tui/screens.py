@@ -1,7 +1,7 @@
 """Screen definitions for the Textual dashboard application."""
 
 import json
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from rich.table import Table
 from rich.text import Text
@@ -69,7 +69,7 @@ class DashboardScreen(Screen):
     }
     """
 
-    def __init__(self, **kwargs: object) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the dashboard screen.
 
         Args:
@@ -187,7 +187,7 @@ class CertificateDetailScreen(Screen):
     }
     """
 
-    def __init__(self, certificate: CertificateHealth, **kwargs: object) -> None:
+    def __init__(self, certificate: CertificateHealth, **kwargs: Any) -> None:
         """Initialize the detail screen.
 
         Args:
@@ -274,13 +274,9 @@ class CertificateDetailScreen(Screen):
 
         return table
 
-    def action_dismiss(self) -> None:
-        """Close the detail screen."""
-        self.dismiss()
-
     def action_export_json(self) -> None:
         """Export certificate details as JSON."""
-        data = {
+        data: dict[str, object] = {
             "domain": self.certificate.domain,
             "status": self.certificate.status.name,
             "key_type": self.certificate.key_type,

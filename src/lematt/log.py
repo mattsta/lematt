@@ -83,7 +83,7 @@ def log_certificate_status(
         days_remaining: Days until expiration.
         error: Error message if any.
     """
-    extra = {
+    extra: dict[str, object] = {
         "domain": domain,
         "key_type": key_type,
         "status": status,
