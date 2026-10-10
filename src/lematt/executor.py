@@ -83,7 +83,8 @@ def _process_domain_worker(
 
 
 def task_key(domain_config: DomainConfig, key_type: KeyType) -> str:
-    return f"{domain_config.primary_domain}[{key_type}]"
+    # filename_base is unique per configured line (unlike the primary name)
+    return f"{domain_config.filename_base}[{key_type}]"
 
 
 class TaskStatus(Enum):

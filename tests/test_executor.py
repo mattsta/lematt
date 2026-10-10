@@ -128,3 +128,12 @@ def test_second_signal_terminates_running_workers(config):
     with pytest.raises(KeyboardInterrupt):
         executor._signal_handler(2, None)
     assert terminated == [True]
+
+
+def test_lines_sharing_a_primary_name_are_tracked_separately(config):
+    domains = [DomainConfig("a.example"), DomainConfig("a.example", ["www.a.example"])]
+
+    executor = CertificateExecutor(config, max_workers=1)
+    executor.process_batch(domains, DomainActions())
+
+    assert (executor.progress.total, executor.progress.completed) == (4, 4)

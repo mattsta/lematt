@@ -83,6 +83,13 @@ class ConfigError(ValueError):
 # ---------------------------------------------------------------------------
 
 
+def _string_list(value: Any, where: str) -> list[str]:
+    """A TOML array of strings (a bare string is an error, not characters)."""
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ConfigError(f"{where}: must be a list of strings")
+    return list(value)
+
+
 def check_profile(profile: Any, where: str) -> str | None:
     """Validate an ACME profile name (offered profiles are checked at order time)."""
     if profile is None:
@@ -152,7 +159,9 @@ def domains_from_toml(entries: Iterable[dict[str, Any]]) -> list[DomainConfig]:
         profile = check_profile(entry.get("profile"), where)
         domains.append(
             make_domain_config(
-                [primary, *entry.get("sans", [])], where, profile=profile
+                [primary, *_string_list(entry.get("sans", []), f"{where} sans")],
+                where,
+                profile=profile,
             )
         )
     return domains
@@ -228,11 +237,15 @@ def actions_from_toml(tables: dict[str, dict[str, Any]]) -> DomainActions:
         warn_obsolete_config_keys(table, where)
         action = ActionConfig(
             name=name,
-            prepare_commands=list(table.get("prepare", [])),
-            upload_certs_commands=list(table.get("upload_certs", [])),
-            upload_keys_commands=list(table.get("upload_keys", [])),
-            update_commands=list(table.get("update", [])),
-            domains=list(table.get("domains", [])),
+            prepare_commands=_string_list(table.get("prepare", []), f"{where} prepare"),
+            upload_certs_commands=_string_list(
+                table.get("upload_certs", []), f"{where} upload_certs"
+            ),
+            upload_keys_commands=_string_list(
+                table.get("upload_keys", []), f"{where} upload_keys"
+            ),
+            update_commands=_string_list(table.get("update", []), f"{where} update"),
+            domains=_string_list(table.get("domains", []), f"{where} domains"),
         )
         _add_action_section(result, action, where)
     return result

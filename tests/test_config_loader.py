@@ -233,3 +233,32 @@ def test_bad_domain_options_are_rejected(ini_dir, line, message):
 
     with pytest.raises(ConfigError, match=message):
         load(ini_dir / "lematt.conf").get_domains()
+
+
+@pytest.mark.parametrize(
+    ("replace", "message"),
+    [
+        (
+            ('sans = ["www", "mail.example.org"]', 'sans = "www"'),
+            "sans: must be a list",
+        ),
+        (
+            ('domains = ["mail.example.org"]', 'domains = "mail.example.org"'),
+            "domains: must be a list",
+        ),
+        (
+            (
+                'update = ["systemctl reload nginx"]',
+                'update = "systemctl reload nginx"',
+            ),
+            "update: must be a list",
+        ),
+    ],
+)
+def test_toml_strings_where_lists_are_required(tmp_path, replace, message):
+    config = write(tmp_path, "lematt.toml", TOML.replace(*replace))
+
+    with pytest.raises(ConfigError, match=message):
+        loader = load(config)
+        loader.get_domains()
+        loader.get_actions()

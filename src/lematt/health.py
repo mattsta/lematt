@@ -92,7 +92,9 @@ class SystemHealth:
 
     status: HealthStatus
     certificates: list[CertificateHealth]
-    checked_at: datetime.datetime = field(default_factory=datetime.datetime.now)
+    checked_at: datetime.datetime = field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC)
+    )
     summary: str = ""
 
     @property

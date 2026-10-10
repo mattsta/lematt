@@ -419,7 +419,7 @@ class ReportRenderer:
         # Summary
         content.append(f"{health.summary}\n", style="dim")
         content.append(
-            f"Checked at: {health.checked_at.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Checked at: {health.checked_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",
             style="dim",
         )
 
