@@ -5,9 +5,42 @@ for certificate management operations.
 """
 
 import datetime
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
+
+from loguru import logger
+
+# Let's Encrypt no longer supports OCSP and rejects Must-Staple requests,
+# so these settings from older configs are ignored with a warning.
+OBSOLETE_DOMAIN_FLAGS = frozenset({"+ocsp", "-ocsp"})
+OBSOLETE_CONFIG_KEYS = frozenset({"ocspStapleRequired", "ocsp_staple_required"})
+
+
+def _warn_obsolete(setting: str, where: str) -> None:
+    logger.warning(
+        f"{where}: ignoring obsolete '{setting}' (Let's Encrypt no longer "
+        "supports OCSP Must-Staple); remove it from your config"
+    )
+
+
+def drop_obsolete_domain_flags(parts: list[str], where: str) -> list[str]:
+    """Return domain tokens without obsolete flags, warning about each one."""
+    for flag in sorted(OBSOLETE_DOMAIN_FLAGS.intersection(parts)):
+        _warn_obsolete(flag, where)
+    return [p for p in parts if p not in OBSOLETE_DOMAIN_FLAGS]
+
+
+def warn_obsolete_config_keys(keys: Iterable[str], where: str) -> None:
+    """Warn about obsolete keys present in a configuration section or entry.
+
+    Matching ignores case because configparser lowercases option names.
+    """
+    present = {key.lower() for key in keys}
+    for key in sorted(OBSOLETE_CONFIG_KEYS):
+        if key.lower() in present:
+            _warn_obsolete(key, where)
 
 
 class KeyType(Enum):
@@ -69,7 +102,6 @@ class DomainConfig:
 
     primary_domain: str
     san_domains: list[str] = field(default_factory=list)
-    ocsp_staple_required: bool = False
 
     @property
     def all_domains(self) -> list[str]:
@@ -103,7 +135,6 @@ class ActionConfig:
     upload_certs_commands: list[str] = field(default_factory=list)
     upload_keys_commands: list[str] = field(default_factory=list)
     update_commands: list[str] = field(default_factory=list)
-    ocsp_staple_required: bool = False
     domains: list[str] = field(default_factory=list)
 
     def has_actions(self) -> bool:
@@ -123,7 +154,6 @@ class ActionConfig:
             "uploadCerts": self.upload_certs_commands,
             "uploadKeys": self.upload_keys_commands,
             "update": self.update_commands,
-            "ocspStapleRequired": self.ocsp_staple_required,
         }
 
     @classmethod
@@ -135,7 +165,6 @@ class ActionConfig:
             upload_certs_commands=list(data.get("uploadCerts", [])),  # type: ignore[arg-type]
             upload_keys_commands=list(data.get("uploadKeys", [])),  # type: ignore[arg-type]
             update_commands=list(data.get("update", [])),  # type: ignore[arg-type]
-            ocsp_staple_required=bool(data.get("ocspStapleRequired", False)),
         )
 
 
@@ -153,11 +182,6 @@ class DomainActions:
     def get_for_domain(self, domain: str) -> ActionConfig:
         """Get the action configuration for a domain."""
         return self.domain_configs.get(domain, self.default)
-
-    def get_ocsp_required(self, domain: str) -> bool:
-        """Get OCSP stapling requirement for a domain."""
-        config = self.get_for_domain(domain)
-        return config.ocsp_staple_required
 
     def all_action_names(self) -> dict[str, ActionConfig]:
         """Get all named action configurations."""

@@ -16,7 +16,12 @@ from pathlib import Path
 from loguru import logger
 
 from lematt.actions import ActionRunner
-from lematt.config import DomainConfig, LemattConfig, RenewalSummary
+from lematt.config import (
+    DomainConfig,
+    LemattConfig,
+    RenewalSummary,
+    drop_obsolete_domain_flags,
+)
 from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import EVENT, setup_logging
 from lematt.manager import CertificateManager
@@ -51,13 +56,9 @@ except ImportError:
 def load_domains(config_base: str) -> list[DomainConfig]:
     """Load domain configuration from the domains file.
 
-    Supports per-domain OCSP stapling configuration:
-    - +ocsp : Enable OCSP Must-Staple for this certificate
-    - -ocsp : Explicitly disable OCSP Must-Staple (default)
-
     Example:
-        example.com www mail +ocsp
-        other.com www -ocsp
+        example.com www mail
+        other.com www.other.com
 
     Args:
         config_base: Base configuration directory.
@@ -74,18 +75,9 @@ def load_domains(config_base: str) -> list[DomainConfig]:
             if not line or line.startswith("#"):
                 continue
 
-            parts = line.split()
-
-            # Extract OCSP flags
-            ocsp_required = False
-            domain_parts: list[str] = []
-            for part in parts:
-                if part == "+ocsp":
-                    ocsp_required = True
-                elif part == "-ocsp":
-                    ocsp_required = False
-                else:
-                    domain_parts.append(part)
+            domain_parts = drop_obsolete_domain_flags(
+                line.split(), f"{domains_file}:{line_num}"
+            )
 
             if not domain_parts:
                 logger.warning(f"Skipping empty domain line {line_num}")
@@ -107,13 +99,7 @@ def load_domains(config_base: str) -> list[DomainConfig]:
                     domain = f"{domain}.{primary}"
                 sans.append(domain)
 
-            domains.append(
-                DomainConfig(
-                    primary_domain=primary,
-                    san_domains=sans,
-                    ocsp_staple_required=ocsp_required,
-                )
-            )
+            domains.append(DomainConfig(primary_domain=primary, san_domains=sans))
 
     return domains
 
@@ -666,7 +652,6 @@ def main() -> int:
                         "primary": d.primary_domain,
                         "sans": d.san_domains,
                         "all_domains": d.all_domains,
-                        "ocsp_staple_required": d.ocsp_staple_required,
                     }
                 )
             print(json.dumps(domain_list, indent=2))  # JSON data output to stdout
@@ -674,13 +659,9 @@ def main() -> int:
             logger.info(f"Configured domains ({len(domains)} certificates):")
             logger.info("-" * 60)
             for i, d in enumerate(domains, 1):
-                ocsp_marker = " [+ocsp]" if d.ocsp_staple_required else ""
+                logger.info(f"{i:3}. {d.primary_domain}")
                 if d.san_domains:
-                    sans_str = ", ".join(d.san_domains)
-                    logger.info(f"{i:3}. {d.primary_domain}{ocsp_marker}")
-                    logger.info(f"     SANs: {sans_str}")
-                else:
-                    logger.info(f"{i:3}. {d.primary_domain}{ocsp_marker}")
+                    logger.info(f"     SANs: {', '.join(d.san_domains)}")
         return 0
 
     # Handle --health-check: run health checks on certificates

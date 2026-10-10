@@ -167,7 +167,6 @@ certificates and the overall system, providing detailed diagnostics.
    - SSL/TLS connection to server
    - Certificate matches expected domain
    - Proper chain presentation
-   - OCSP stapling (if configured)
 
 ## Integration
 
@@ -316,7 +315,6 @@ days_before_expiry = 30
 [[domains]]
 primary_domain = "example.com"
 san_domains = ["www.example.com"]
-ocsp_staple_required = false
 
 # Deployment actions
 [actions.default]
@@ -357,7 +355,6 @@ Each `[[domains]]` section defines a certificate to manage.
 |-------|------|-------------|
 | `primary_domain` | string | Main domain for the certificate |
 | `san_domains` | array | Additional domains (SANs) |
-| `ocsp_staple_required` | bool | Enable OCSP stapling |
 | `key_types` | array | Override global key types |
 
 ## SAN Certificates
@@ -392,14 +389,12 @@ san_domains = ["www.example.com"]
 
 [[domains]]
 primary_domain = "api.example.com"
-ocsp_staple_required = true
 ```
 """,
         examples=[
             "[[domains]]",
             'primary_domain = "example.com"',
             'san_domains = ["www.example.com", "mail.example.com"]',
-            "ocsp_staple_required = true",
         ],
         see_also=["configuration", "certificates", "actions"],
         keywords=["domain", "san", "certificate", "subdomain"],

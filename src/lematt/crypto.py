@@ -149,7 +149,6 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
 def generate_csr_native(
     private_key_path: str,
     domains: list[str],
-    ocsp_must_staple: bool = False,
 ) -> bytes:
     """Generate CSR using cryptography library."""
     if not HAS_CRYPTOGRAPHY:
@@ -180,13 +179,6 @@ def generate_csr_native(
         x509.SubjectAlternativeName(san_names),
         critical=False,
     )
-
-    # Add OCSP Must-Staple if requested
-    if ocsp_must_staple:
-        builder = builder.add_extension(
-            x509.TLSFeature([x509.TLSFeatureType.status_request]),
-            critical=False,
-        )
 
     # Sign and return
     csr = builder.sign(private_key, hashes.SHA256(), default_backend())
@@ -311,12 +303,11 @@ def create_csr(
     private_key_path: str,
     domains: list[str],
     output_path: str,
-    ocsp_must_staple: bool = False,
 ) -> bool:
     """Create a CSR, using native crypto if available."""
     if HAS_CRYPTOGRAPHY:
         try:
-            csr_bytes = generate_csr_native(private_key_path, domains, ocsp_must_staple)
+            csr_bytes = generate_csr_native(private_key_path, domains)
             with open(output_path, "wb") as f:
                 f.write(csr_bytes)
             return True
@@ -336,19 +327,10 @@ def create_csr(
         san_config = ",".join(alt_names)
         cmd_san = "-reqexts SAN"
 
-    ocsp_line = ""
-    if ocsp_must_staple:
-        ocsp_line = "1.3.6.1.5.5.7.1.24 = DER:30:03:02:01:05"
-
     stdin_config = f"""[req]
 distinguished_name=req_dn
 
 [req_dn]
-
-[v3_req]
-basicConstraints=CA:FALSE
-keyUsage=nonRepudiation,digitalSignature,keyEncipherment
-{ocsp_line}
 
 [SAN]
 subjectAltName={san_config}"""

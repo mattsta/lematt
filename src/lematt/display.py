@@ -240,14 +240,11 @@ def create_domain_tree(domains: list[dict], title: str = "Configured Domains") -
     for i, domain in enumerate(domains, 1):
         primary = domain.get("primary", domain.get("primary_domain", "unknown"))
         sans = domain.get("sans", domain.get("san_domains", []))
-        ocsp = domain.get("ocsp_staple_required", False)
 
         # Create domain node
         label = Text()
         label.append(f"{i}. ", style="dim")
         label.append(primary, style="bold")
-        if ocsp:
-            label.append(" [+ocsp]", style="green")
 
         domain_node = tree.add(label)
 

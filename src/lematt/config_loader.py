@@ -11,7 +11,14 @@ from pathlib import Path  # noqa: TC003 - used at runtime in dataclass
 
 from loguru import logger
 
-from lematt.config import ActionConfig, DomainActions, DomainConfig, LemattConfig
+from lematt.config import (
+    ActionConfig,
+    DomainActions,
+    DomainConfig,
+    LemattConfig,
+    drop_obsolete_domain_flags,
+    warn_obsolete_config_keys,
+)
 
 
 @dataclass
@@ -36,11 +43,9 @@ class ConfigLoader:
         [[domains]]
         primary = "example.com"
         sans = ["www", "mail"]
-        ocsp_staple_required = false
 
         [[domains]]
         primary = "other.com"
-        ocsp_staple_required = true
 
         [actions.default]
         update = ["systemctl reload nginx"]
@@ -182,6 +187,7 @@ class ConfigLoader:
             primary = entry.get("primary", "")
             if not primary:
                 continue
+            warn_obsolete_config_keys(entry, f"lematt.toml [[domains]] {primary}")
 
             sans = entry.get("sans", [])
             # Expand shorthand SANs
@@ -192,11 +198,7 @@ class ConfigLoader:
                 expanded_sans.append(san)
 
             domains.append(
-                DomainConfig(
-                    primary_domain=primary,
-                    san_domains=expanded_sans,
-                    ocsp_staple_required=entry.get("ocsp_staple_required", False),
-                )
+                DomainConfig(primary_domain=primary, san_domains=expanded_sans)
             )
 
         return domains
@@ -210,24 +212,14 @@ class ConfigLoader:
         domains: list[DomainConfig] = []
 
         with open(domains_file) as f:
-            for line in f:
+            for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
 
-                parts = line.split()
-
-                # Extract OCSP flags
-                ocsp_required = False
-                domain_parts: list[str] = []
-                for part in parts:
-                    if part == "+ocsp":
-                        ocsp_required = True
-                    elif part == "-ocsp":
-                        ocsp_required = False
-                    else:
-                        domain_parts.append(part)
-
+                domain_parts = drop_obsolete_domain_flags(
+                    line.split(), f"{domains_file}:{line_num}"
+                )
                 if not domain_parts:
                     continue
 
@@ -239,13 +231,7 @@ class ConfigLoader:
                         domain = f"{domain}.{primary}"
                     sans.append(domain)
 
-                domains.append(
-                    DomainConfig(
-                        primary_domain=primary,
-                        san_domains=sans,
-                        ocsp_staple_required=ocsp_required,
-                    )
-                )
+                domains.append(DomainConfig(primary_domain=primary, san_domains=sans))
 
         return domains
 
@@ -268,13 +254,13 @@ class ConfigLoader:
         result = DomainActions()
 
         for name, config in actions_data.items():
+            warn_obsolete_config_keys(config, f"lematt.toml [actions.{name}]")
             action_config = ActionConfig(
                 name=name,
                 prepare_commands=config.get("prepare", []),
                 upload_certs_commands=config.get("upload_certs", []),
                 upload_keys_commands=config.get("upload_keys", []),
                 update_commands=config.get("update", []),
-                ocsp_staple_required=config.get("ocsp_staple_required", False),
                 domains=config.get("domains", []),
             )
 
@@ -302,12 +288,6 @@ class ConfigLoader:
 
         result = DomainActions()
 
-        # Get default OCSP setting
-        default_ocsp = False
-        if "default" in parser and "ocspStapleRequired" in parser["default"]:
-            default_ocsp = parser["default"].getboolean("ocspStapleRequired")
-        parser["DEFAULT"] = {"ocspStapleRequired": str(default_ocsp)}
-
         def extract_commands(section: configparser.SectionProxy, key: str) -> list[str]:
             if key in section:
                 return json.loads(section[key])
@@ -315,6 +295,7 @@ class ConfigLoader:
 
         for section in parser.sections():
             section_config = parser[section]
+            warn_obsolete_config_keys(section_config, f"actions.conf [{section}]")
 
             action_config = ActionConfig(
                 name=section,
@@ -322,7 +303,6 @@ class ConfigLoader:
                 upload_certs_commands=extract_commands(section_config, "uploadCerts"),
                 upload_keys_commands=extract_commands(section_config, "uploadKeys"),
                 update_commands=extract_commands(section_config, "update"),
-                ocsp_staple_required=section_config.getboolean("ocspStapleRequired"),
             )
 
             if section == "default":
@@ -372,12 +352,10 @@ always_generate_new_keys = false
 [[domains]]
 primary = "example.com"
 sans = ["www", "mail"]  # Shorthand: "www" expands to "www.example.com"
-ocsp_staple_required = false
 
 [[domains]]
 primary = "api.example.com"
 # No SANs - single domain certificate
-ocsp_staple_required = true
 
 # Action configurations
 # Define what happens after certificates are renewed

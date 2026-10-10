@@ -376,7 +376,6 @@ class CertificateManager:
         private_key_path: str,
         domains: list[str],
         output_path: str,
-        ocsp_must_staple: bool = False,
     ) -> bool:
         """Generate a Certificate Signing Request.
 
@@ -384,7 +383,6 @@ class CertificateManager:
             private_key_path: Path to the private key.
             domains: List of domains for the certificate.
             output_path: Path to write the CSR.
-            ocsp_must_staple: Whether to include OCSP Must-Staple extension.
 
         Returns:
             True if successful, False otherwise.
@@ -401,19 +399,10 @@ class CertificateManager:
             san_config = ",".join(alt_names)
             cmd_san = "-reqexts SAN"
 
-        ocsp_line = ""
-        if ocsp_must_staple:
-            ocsp_line = "1.3.6.1.5.5.7.1.24 = DER:30:03:02:01:05"
-
         stdin_config = f"""[req]
 distinguished_name=req_dn
 
 [req_dn]
-
-[v3_req]
-basicConstraints=CA:FALSE
-keyUsage=nonRepudiation,digitalSignature,keyEncipherment
-{ocsp_line}
 
 [SAN]
 subjectAltName={san_config}"""
@@ -626,14 +615,7 @@ subjectAltName={san_config}"""
 
         # Generate CSR if needed
         if self.config.always_generate_new_keys or not os.path.isfile(csr):
-            # Check OCSP requirements
-            ocsp_required = self._check_ocsp_requirement(domain_config, domain_actions)
-            if not self.generate_csr(
-                private_key,
-                domain_config.all_domains,
-                csr,
-                ocsp_required,
-            ):
+            if not self.generate_csr(private_key, domain_config.all_domains, csr):
                 return CertificateResult(
                     domain_config=domain_config,
                     key_type=key_type,
@@ -703,33 +685,6 @@ subjectAltName={san_config}"""
             cert_path=cert,
             key_path=private_key,
         )
-
-    def _check_ocsp_requirement(
-        self,
-        domain_config: DomainConfig,
-        domain_actions: DomainActions,
-    ) -> bool:
-        """Check if OCSP stapling is required for a domain.
-
-        Args:
-            domain_config: The domain configuration.
-            domain_actions: DomainActions container with action configs.
-
-        Returns:
-            True if OCSP stapling is required.
-        """
-        # Check domain-level OCSP setting first (from domains file)
-        if domain_config.ocsp_staple_required:
-            return True
-
-        # Fall back to action-level OCSP setting
-        first_ocsp = domain_actions.get_ocsp_required(domain_config.primary_domain)
-        for domain in domain_config.san_domains:
-            if domain_actions.get_ocsp_required(domain) != first_ocsp:
-                raise ValueError(
-                    f"All SAN domains must have same OCSP config: {domain_config.all_domains}"
-                )
-        return first_ocsp
 
     def get_status_data(self, domains: Sequence[DomainConfig]) -> list[dict]:
         """Get certificate status as structured data.

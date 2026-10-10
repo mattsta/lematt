@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from lematt.config import ActionConfig, CertificateResult, DomainActions, LemattConfig
+from lematt.config import (
+    ActionConfig,
+    CertificateResult,
+    DomainActions,
+    LemattConfig,
+    warn_obsolete_config_keys,
+)
 from lematt.log import EVENT
 
 if TYPE_CHECKING:
@@ -73,30 +79,15 @@ class ActionRunner:
                 return json.loads(section_config[key])
             return []
 
-        # Get default OCSP setting
-        default_ocsp = False
-        if "default" in updaters and "ocspStapleRequired" in updaters["default"]:
-            default_ocsp = updaters["default"].getboolean("ocspStapleRequired")
-
         # Validate sections
         for section in ["default", "every"]:
-            if section in updaters:
-                section_config = updaters[section]
-                if "domains" in section_config:
-                    raise ValueError(
-                        f"'domains' entry not allowed in section [{section}]"
-                    )
-                if section == "every" and "ocspStapleRequired" in section_config:
-                    raise ValueError(
-                        f"'ocspStapleRequired' not allowed in section [{section}]"
-                    )
-
-        # Set default OCSP for all sections
-        updaters["DEFAULT"] = {"ocspStapleRequired": str(default_ocsp)}
+            if section in updaters and "domains" in updaters[section]:
+                raise ValueError(f"'domains' entry not allowed in section [{section}]")
 
         # Process all sections
         for section in updaters.sections():
             section_config = updaters[section]
+            warn_obsolete_config_keys(section_config, f"actions.conf [{section}]")
 
             # Build ActionConfig for this section
             action_config = ActionConfig(
@@ -105,7 +96,6 @@ class ActionRunner:
                 upload_certs_commands=extract_commands(section_config, "uploadCerts"),
                 upload_keys_commands=extract_commands(section_config, "uploadKeys"),
                 update_commands=extract_commands(section_config, "update"),
-                ocsp_staple_required=section_config.getboolean("ocspStapleRequired"),
             )
 
             if section == "default":

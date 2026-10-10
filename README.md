@@ -11,7 +11,6 @@ A high-performance, type-safe certificate management system for automated Let's 
 - **Multiple Output Formats**: Human-readable tables or JSON for monitoring integration
 - **Modern Python**: Type-safe dataclasses, Python 3.14+, native cryptography support
 - **TOML Configuration**: Modern config format with native list support (INI still supported)
-- **OCSP Must-Staple**: Per-domain OCSP stapling configuration
 - **Test Mode**: Isolated staging environment to validate configuration safely
 - **Systemd Integration**: One-command timer installation with security hardening
 - **Health Checks**: Certificate expiry monitoring with Prometheus metrics export
@@ -125,13 +124,13 @@ lematt/
         ↓
 2. Validate Configuration
         ↓
-3. Load Domain List (with OCSP flags)
+3. Load Domain List
         ↓
 4. For each domain + key type (RSA, EC):
    a. Check if renewal needed
    b. Run prepare actions (start temp servers, open ports)
    c. Generate key (if needed)
-   d. Generate CSR (with OCSP Must-Staple if configured)
+   d. Generate CSR
    e. Request certificate from Let's Encrypt
    f. Cleanup prepare actions
         ↓
@@ -153,7 +152,7 @@ lematt supports two configuration formats:
 | -------------- | ------ | ------------------------------------------------------- |
 | `lematt.toml`  | TOML   | All-in-one modern config (domains + actions + settings) |
 | `lematt.conf`  | INI    | Global settings                                         |
-| `domains`      | Text   | Domain list with optional OCSP flags                    |
+| `domains`      | Text   | Domain list, one certificate per line                   |
 | `actions.conf` | INI    | Pre/post certificate actions                            |
 
 lematt auto-detects format: if `lematt.toml` exists, it's used; otherwise falls back to INI files.
@@ -194,11 +193,9 @@ always_generate_new_keys = false
 [[domains]]
 primary = "example.com"
 sans = ["www", "mail", "api"]  # Shorthand expands to www.example.com, etc.
-ocsp_staple_required = false
 
 [[domains]]
 primary = "secure.example.com"
-ocsp_staple_required = true    # Enable OCSP Must-Staple
 
 [[domains]]
 primary = "cdn.example.com"
@@ -251,7 +248,6 @@ update = [
 | ---------------------- | ------------ | -------- | --------------------------------- |
 | `primary`              | string       | required | Primary domain name (CN)          |
 | `sans`                 | list[string] | []       | Subject Alternative Names         |
-| `ocsp_staple_required` | bool         | false    | Enable OCSP Must-Staple extension |
 
 #### `[actions.*]` Tables
 
@@ -295,7 +291,7 @@ alwaysGenerateNewKeys: no
 
 ```
 # Each line = one certificate
-# Format: primary_domain [san1] [san2] ... [+ocsp|-ocsp]
+# Format: primary_domain [san1] [san2] ...
 
 # Basic single domain
 example.com
@@ -306,15 +302,12 @@ example.com www mail api
 # Domain with full FQDNs as SANs
 example.com www.example.com mail.example.com
 
-# Enable OCSP Must-Staple for this certificate
-secure.example.com +ocsp
-
-# Explicitly disable OCSP (default)
-legacy.example.com -ocsp
-
-# Complex example with multiple SANs and OCSP
-corp.example.com intranet hr payroll git wiki +ocsp
+# Many SANs on one certificate
+corp.example.com intranet hr payroll git wiki
 ```
+
+Lines containing the obsolete `+ocsp`/`-ocsp` flags still load; the flags are
+ignored with a warning because Let's Encrypt no longer supports OCSP Must-Staple.
 
 ### actions.conf
 
@@ -359,7 +352,7 @@ update: ["ssh mail-server 'systemctl reload postfix'"]
 **INI (domains file):**
 
 ```
-example.com www mail +ocsp
+example.com www mail
 api.example.com
 ```
 
@@ -369,7 +362,6 @@ api.example.com
 [[domains]]
 primary = "example.com"
 sans = ["www", "mail"]
-ocsp_staple_required = true
 
 [[domains]]
 primary = "api.example.com"
@@ -410,7 +402,6 @@ update = ["ssh mail reload-postfix"]
 | Lists       | JSON syntax: `["a", "b"]` | Native TOML: `["a", "b"]`                       |
 | Booleans    | `yes`/`no`                | `true`/`false`                                  |
 | Key naming  | camelCase                 | snake_case                                      |
-| OCSP config | In domains file: `+ocsp`  | In `[[domains]]`: `ocsp_staple_required = true` |
 | Domains     | Separate file             | Inline `[[domains]]` array                      |
 | Actions     | Separate file             | Inline `[actions.*]` tables                     |
 
@@ -646,14 +637,12 @@ lematt --test --list-domains --json
   {
     "primary": "example.com",
     "sans": ["www.example.com", "mail.example.com"],
-    "all_domains": ["example.com", "www.example.com", "mail.example.com"],
-    "ocsp_staple_required": false
+    "all_domains": ["example.com", "www.example.com", "mail.example.com"]
   },
   {
     "primary": "secure.example.com",
     "sans": [],
-    "all_domains": ["secure.example.com"],
-    "ocsp_staple_required": true
+    "all_domains": ["secure.example.com"]
   }
 ]
 ```
@@ -698,50 +687,6 @@ lematt --test --list-domains --json
 | `[default]`     | Applied to domains without specific override      |
 | `[every]`       | Applied to ALL renewed certificates (in addition) |
 | `[custom-name]` | Applied only to domains listed in `domains` key   |
-
----
-
-## OCSP Must-Staple
-
-OCSP Must-Staple is a certificate extension that tells browsers to require OCSP stapling. This improves security but requires server configuration.
-
-### Per-Domain Configuration
-
-**domains file (INI):**
-
-```
-example.com www +ocsp           # Enable OCSP
-legacy.example.com -ocsp        # Explicitly disable (default)
-```
-
-**TOML:**
-
-```toml
-[[domains]]
-primary = "example.com"
-sans = ["www"]
-ocsp_staple_required = true
-```
-
-### Server Configuration Required
-
-When using OCSP Must-Staple, configure your web server:
-
-**nginx:**
-
-```nginx
-ssl_stapling on;
-ssl_stapling_verify on;
-resolver 8.8.8.8 8.8.4.4 valid=300s;
-resolver_timeout 5s;
-```
-
-**Apache:**
-
-```apache
-SSLUseStapling On
-SSLStaplingCache shmcb:${APACHE_RUN_DIR}/ssl_stapling(32768)
-```
 
 ---
 
@@ -1427,7 +1372,6 @@ domains = [
     DomainConfig(
         primary_domain="example.com",
         san_domains=["www.example.com"],
-        ocsp_staple_required=False,
     ),
 ]
 

@@ -361,9 +361,6 @@ class ReportRenderer:
         domains_node.add(f"Total: {len(config.domains)}")  # type: ignore[attr-defined]
         san_total = sum(len(d.san_domains) for d in config.domains)  # type: ignore[attr-defined,misc]
         domains_node.add(f"Total SANs: {san_total}")
-        ocsp_count = sum(1 for d in config.domains if d.ocsp_staple_required)  # type: ignore[attr-defined,misc]
-        if ocsp_count > 0:
-            domains_node.add(f"OCSP stapling: {ocsp_count}")
 
         # Actions summary
         if hasattr(config, "actions") and config.actions:  # type: ignore[attr-defined]
