@@ -342,3 +342,20 @@ def test_nothing_is_notified_without_configuration(monkeypatch, setup):
 
     assert run(monkeypatch, base, "--domain", "mail.example.org") == 1
     assert sent == []
+
+
+def test_caa_records_pin_this_account(monkeypatch, setup, capsys):
+    base, _, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    capsys.readouterr()
+
+    assert run(monkeypatch, base, "--caa-records") == 0
+
+    out = capsys.readouterr().out.splitlines()
+    lines = [line for line in out if "\tCAA\t0 issue " in line]
+    assert [line.split("\t")[0] for line in lines] == [
+        "example.com.",
+        "mail.example.org.",
+    ]
+    assert "accounturi=https://acme.test/acct/" in lines[0]
+    assert lines[0].endswith('; validationmethods=http-01"')

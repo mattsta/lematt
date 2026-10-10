@@ -224,6 +224,8 @@ certificate status and health information.
   actions), then print a summary and exit
 - `--list-domains`: Print the configured certificates and exit
 - `--init-toml`: Write an example `lematt.toml` next to `--config`
+- `--caa-records`: Print CAA DNS records limiting issuance to Let's
+  Encrypt, this ACME account and http-01 validation
 - `--report`: Generate an inventory/renewal report (`--report-output`,
   `--report-format console|json|markdown`)
 

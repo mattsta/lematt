@@ -223,6 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Create example lematt.toml configuration file and exit",
     )
+    parser.add_argument(
+        "--caa-records",
+        dest="caa_records",
+        action="store_true",
+        help="Print recommended CAA DNS records (Let's Encrypt, this account, http-01)",
+    )
 
     # Systemd management
     systemd_group = parser.add_argument_group("systemd automation")
@@ -662,6 +668,55 @@ def cmd_test_notification(ctx: Context) -> int:
     return 0
 
 
+def caa_names(domains: list[DomainConfig]) -> list[str]:
+    """Configured names, minus those covered by a configured parent.
+
+    CAA records apply to subdomains too (resolvers climb the tree), so a
+    record at example.com also covers www.example.com.
+    """
+    names = sorted({name for d in domains for name in d.all_domains}, key=len)
+    chosen: list[str] = []
+    for name in names:
+        if not any(name.endswith(f".{parent}") for parent in chosen):
+            chosen.append(name)
+    return sorted(chosen)
+
+
+def cmd_caa_records(ctx: Context) -> int:
+    """--caa-records: CAA records limiting issuance to this account (RFC 8657)."""
+    from lematt.acme import AccountKey
+
+    config = ctx.config
+    account_url = None
+    try:
+        thumbprint = AccountKey.from_file(config.account_key).thumbprint
+        saved = StateStore(Path(config.state_dir)).load_account(
+            config.acme_directory_url, thumbprint
+        )
+        account_url = saved.account_url if saved else None
+    except (OSError, ValueError) as e:
+        logger.warning(f"Could not read the account key: {e}")
+
+    value = "letsencrypt.org"
+    if account_url:
+        value += f"; accounturi={account_url}"
+    else:
+        logger.warning(
+            "No saved ACME account for this mode yet (it is recorded on the first "
+            "renewal); records below omit accounturi"
+        )
+    value += "; validationmethods=http-01"
+
+    print("; Only Let's Encrypt may issue for these names, only to lematt's")
+    print("; account, and only after http-01 validation (RFC 8659 / RFC 8657).")
+    print("; lematt issues no wildcards; uncomment issuewild to forbid them for")
+    print("; everyone (only if nothing else issues wildcards for these names).")
+    for name in caa_names(ctx.domains):
+        print(f'{name}.\tIN\tCAA\t0 issue "{value}"')
+        print(f';{name}.\tIN\tCAA\t0 issuewild ";"')
+    return 0
+
+
 def selected_domains(ctx: Context) -> list[DomainConfig] | None:
     """The certificates to act on (all, or the one --domain names)."""
     wanted = ctx.args.single_domain
@@ -806,6 +861,7 @@ CONFIGURED_COMMANDS: list[tuple[Predicate, Callable[[Context], int], bool]] = [
     (lambda a: a.report, cmd_report, True),
     (lambda a: a.test_notification, cmd_test_notification, False),
     (lambda a: a.show_status, cmd_status, True),
+    (lambda a: a.caa_records, cmd_caa_records, True),
 ]
 
 

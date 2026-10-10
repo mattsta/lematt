@@ -1458,6 +1458,10 @@ actions = loader.get_actions()
 2. **Account Key**: Store securely, never commit to version control
 3. **Action Commands**: Review carefully - they run with lematt's privileges
 4. **Rate Limits**: Don't burn through production limits during testing
+5. **CAA Records**: `lematt --prod --caa-records` prints DNS CAA records that
+   allow only Let's Encrypt to issue for your names, only to lematt's ACME
+   account, and only via http-01 (RFC 8657). Publish them after the first
+   production run, once the account is recorded.
 
 ---
 
