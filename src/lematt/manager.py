@@ -438,6 +438,7 @@ class CertificateManager:
         *,
         session: AcmeSession | None = None,
         replaces: str | None = None,
+        profile: str | None = None,
     ) -> RequestFailure | None:
         """Request a signed certificate from the ACME server.
 
@@ -455,6 +456,7 @@ class CertificateManager:
             session: ACME session to reuse (a new one by default).
             replaces: ARI ID of the certificate being renewed. Let's Encrypt
                 exempts such renewals from rate limits.
+            profile: ACME profile to request (the CA's default if None).
 
         Returns:
             None on success, otherwise what went wrong.
@@ -474,6 +476,7 @@ class CertificateManager:
                     transport=session.transport,
                     solver=session.solver(),
                     replaces=replaces,
+                    profile=profile,
                 )
                 write_file_atomically(output_path, issued.pem.encode())
                 return None
@@ -501,7 +504,9 @@ class CertificateManager:
                 return RequestFailure(str(e))
         return RequestFailure("certificate request failed")
 
-    def record_success(self, plan: RenewalPlan, cert_path: str) -> None:
+    def record_success(
+        self, plan: RenewalPlan, cert_path: str, *, profile: str | None = None
+    ) -> None:
         """Remember a newly issued certificate and reset failure backoff."""
         now = utcnow()
         state, previous = plan.state, plan.state.issued
@@ -513,6 +518,7 @@ class CertificateManager:
                 not_before=info.not_before,
                 not_after=info.not_after,
                 issued_at=now,
+                profile=profile,
             )
         else:
             logger.warning(f"Issued certificate {cert_path} could not be read back")
@@ -527,6 +533,7 @@ class CertificateManager:
             not_after=info.not_after,
             replaced=previous.serial if previous else None,
             reason=plan.decision.reason,
+            profile=profile,
         )
 
     def record_failure(self, plan: RenewalPlan, failure: RequestFailure) -> None:
@@ -766,6 +773,7 @@ class CertificateManager:
             domain_context=f"{domain_config.primary_domain}[{key_type}]",
             session=session,
             replaces=plan.state.issued.ari_id if plan.state.issued else None,
+            profile=self.config.profile_for(domain_config),
         )
         if failure is not None:
             self.record_failure(plan, failure)
@@ -784,7 +792,7 @@ class CertificateManager:
                 self.get_customized_name("cert", domain, "cert-combined", key_type),
                 key_type,
             )
-        self.record_success(plan, cert)
+        self.record_success(plan, cert, profile=self.config.profile_for(domain_config))
         return result(success=True, renewed=True)
 
     def get_status_data(self, domains: Sequence[DomainConfig]) -> list[dict]:
@@ -804,6 +812,7 @@ class CertificateManager:
                     "domain": domain_config.primary_domain,
                     "san_domains": domain_config.san_domains,
                     "key_type": key_type.name.lower(),
+                    "profile": self.config.profile_for(domain_config),
                     "cert_path": info.path,
                     "exists": info.exists,
                     "expires": info.not_after.isoformat() if info.not_after else None,

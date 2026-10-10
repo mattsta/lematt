@@ -295,6 +295,7 @@ lifetime is shorter, because it would renew them on every run.
 | `curve` | prime256v1 | EC curve (prime256v1 or secp384r1) |
 | `alwaysGenerateNewKeys` | no | Rotate keys on every renewal |
 | `rsaTag` / `curveTag` | rsa<bits> / <curve> | Filename tags |
+| `profile` | (CA default) | ACME profile for all certificates (e.g. tlsserver) |
 """,
         examples=[
             "[config]",
@@ -329,6 +330,8 @@ corp.example.com intranet hr git wiki
 - Up to 100 names per certificate
 - Lines starting with `#` are comments
 - SAN certificates are also symlinked under each SAN's name
+- `profile=NAME` requests an ACME profile for that certificate (e.g.
+  `tlsserver` for 45-day or `shortlived` for 6-day certificates)
 """,
         examples=[
             "example.com www mail",

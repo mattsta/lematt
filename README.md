@@ -278,6 +278,7 @@ update = [
 | `ec_curve`                      | string | "prime256v1" | EC curve name                          |
 | `rsa_tag`                       | string | "rsa{bits}"  | Filename tag for RSA certs             |
 | `curve_tag`                     | string | "{curve}"    | Filename tag for EC certs              |
+| `profile`                       | string | unset        | Default ACME profile (e.g. "tlsserver") |
 
 #### `[[domains]]` Array
 
@@ -285,6 +286,7 @@ update = [
 | ---------------------- | ------------ | -------- | --------------------------------- |
 | `primary`              | string       | required | Primary domain name (CN)          |
 | `sans`                 | list[string] | []       | Subject Alternative Names         |
+| `profile`              | string       | unset    | ACME profile for this certificate |
 
 #### `[actions.*]` Tables
 
@@ -341,10 +343,21 @@ example.com www.example.com mail.example.com
 
 # Many SANs on one certificate
 corp.example.com intranet hr payroll git wiki
+
+# Request a specific Let's Encrypt profile for one certificate
+fast.example.com profile=shortlived
 ```
 
 Lines containing the obsolete `+ocsp`/`-ocsp` flags still load; the flags are
 ignored with a warning because Let's Encrypt no longer supports OCSP Must-Staple.
+
+`profile=NAME` selects an ACME certificate profile for that certificate,
+overriding the global `profile` setting. Let's Encrypt offers `classic`
+(the default; 90 days, dropping to 64 days in February 2027 and 45 in
+February 2028), `tlsserver` (45 days today) and `shortlived` (6 days, for
+automated setups only). lematt checks the name against the profiles the CA
+advertises when ordering. A profile change applies at the next renewal;
+use `--force-renew --domain NAME` to switch immediately.
 
 ### actions.conf
 

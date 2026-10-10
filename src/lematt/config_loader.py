@@ -16,6 +16,7 @@ message.
 import configparser
 import json
 import os
+import re
 import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -34,6 +35,10 @@ from lematt.config import (
 )
 
 MAX_NAMES_PER_CERTIFICATE = 100
+
+# Per-certificate options allowed on domains-file lines (KEY=VALUE tokens)
+DOMAIN_OPTIONS = ("profile",)
+PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 # Curves Let's Encrypt accepts for certificate keys
 SUPPORTED_CURVES = ("prime256v1", "secp256r1", "secp384r1")
@@ -59,6 +64,7 @@ TOML_SETTING_TYPES: dict[str, type | tuple[type, ...]] = {
     "ec_curve": str,
     "rsa_tag": str,
     "curve_tag": str,
+    "profile": str,
 }
 TOML_TYPE_NAMES: dict[type | tuple[type, ...], str] = {
     str: "a string",
@@ -77,7 +83,18 @@ class ConfigError(ValueError):
 # ---------------------------------------------------------------------------
 
 
-def make_domain_config(names: list[str], where: str) -> DomainConfig:
+def check_profile(profile: Any, where: str) -> str | None:
+    """Validate an ACME profile name (offered profiles are checked at order time)."""
+    if profile is None:
+        return None
+    if not isinstance(profile, str) or not PROFILE_NAME.match(profile):
+        raise ConfigError(f"{where}: invalid profile name {profile!r}")
+    return profile
+
+
+def make_domain_config(
+    names: list[str], where: str, *, profile: str | None = None
+) -> DomainConfig:
     """Build a certificate definition from its names (primary first).
 
     Names without a dot are shorthand for ``<name>.<primary>``.
@@ -89,11 +106,14 @@ def make_domain_config(names: list[str], where: str) -> DomainConfig:
         )
     primary = names[0]
     sans = [name if "." in name else f"{name}.{primary}" for name in names[1:]]
-    return DomainConfig(primary_domain=primary, san_domains=sans)
+    return DomainConfig(primary_domain=primary, san_domains=sans, profile=profile)
 
 
 def load_domains_file(path: Path) -> list[DomainConfig]:
-    """Parse a domains file: one certificate per line, primary name first."""
+    """Parse a domains file: one certificate per line, primary name first.
+
+    A ``profile=NAME`` token selects the certificate's ACME profile.
+    """
     domains: list[DomainConfig] = []
     with path.open() as f:
         for line_num, raw in enumerate(f, 1):
@@ -101,11 +121,22 @@ def load_domains_file(path: Path) -> list[DomainConfig]:
             if not line or line.startswith("#"):
                 continue
             where = f"{path}:{line_num}"
-            names = drop_obsolete_domain_flags(line.split(), where)
+            names, options = [], {}
+            for token in drop_obsolete_domain_flags(line.split(), where):
+                key, sep, value = token.partition("=")
+                if not sep:
+                    names.append(token)
+                elif key in DOMAIN_OPTIONS:
+                    options[key] = value
+                else:
+                    raise ConfigError(
+                        f"{where}: unknown option '{key}' (known: {', '.join(DOMAIN_OPTIONS)})"
+                    )
             if not names:
                 logger.warning(f"{where}: skipping line without domain names")
                 continue
-            domains.append(make_domain_config(names, where))
+            profile = check_profile(options.get("profile"), where)
+            domains.append(make_domain_config(names, where, profile=profile))
     return domains
 
 
@@ -118,7 +149,12 @@ def domains_from_toml(entries: Iterable[dict[str, Any]]) -> list[DomainConfig]:
         if not primary:
             raise ConfigError(f"{where}: missing 'primary'")
         warn_obsolete_config_keys(entry, f"lematt.toml [[domains]] {primary}")
-        domains.append(make_domain_config([primary, *entry.get("sans", [])], where))
+        profile = check_profile(entry.get("profile"), where)
+        domains.append(
+            make_domain_config(
+                [primary, *entry.get("sans", [])], where, profile=profile
+            )
+        )
     return domains
 
 
@@ -344,6 +380,7 @@ class ConfigLoader:
                 "ec_curve": config.get("curve"),
                 "rsa_tag": config.get("rsaTag", ""),
                 "curve_tag": config.get("curveTag", ""),
+                "profile": check_profile(config.get("profile") or None, str(path)),
             }
         }
 
@@ -437,6 +474,7 @@ class ConfigLoader:
             ec_curve=ec_curve,
             rsa_tag=config.get("rsa_tag") or f"rsa{rsa_bits}",
             curve_tag=config.get("curve_tag") or ec_curve,
+            profile=check_profile(config.get("profile"), "[config] profile"),
             is_test=is_test,
             is_cron=is_cron,
             is_dry_run=is_dry_run,

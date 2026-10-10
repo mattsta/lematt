@@ -293,3 +293,16 @@ def test_already_replaced_falls_back_to_a_plain_order(monkeypatch, setup):
         StateStore(base / "test" / "state").load_cert(cert_id).issued.serial
         != old.serial
     )
+
+
+def test_configured_profile_is_requested_and_recorded(monkeypatch, setup):
+    base, server, _ = setup
+    (base / "domains").write_text("mail.example.org profile=shortlived\n")
+
+    assert run(monkeypatch, base) == 0
+
+    assert {p["profile"] for p in server.payloads["new-order"]} == {"shortlived"}
+    state = StateStore(base / "test" / "state").load_cert("mail.example.org.rsa2048")
+    assert state.issued.profile == "shortlived"
+    lifetime = state.issued.not_after - state.issued.not_before
+    assert lifetime < datetime.timedelta(days=7)

@@ -194,3 +194,42 @@ def test_curves_lets_encrypt_rejects_are_flagged(ini_dir):
     _, warnings = load(ini_dir / "lematt.conf").validate()
 
     assert any("not accepted by Let's Encrypt" in w for w in warnings)
+
+
+def test_profiles_from_domains_file_and_defaults(ini_dir):
+    write(ini_dir, "lematt.conf", INI + "profile: tlsserver\n")
+    write(ini_dir, "domains", "example.com www\nfast.example.com profile=shortlived\n")
+
+    loader = load(ini_dir / "lematt.conf")
+    config = loader.get_lematt_config()
+    domains = loader.get_domains()
+
+    assert [config.profile_for(d) for d in domains] == ["tlsserver", "shortlived"]
+    assert domains[1].all_domains == ["fast.example.com"]
+
+
+def test_toml_profiles(tmp_path):
+    config = write(
+        tmp_path,
+        "lematt.toml",
+        TOML.replace(
+            'sans = ["www", "mail.example.org"]',
+            'sans = ["www"]\nprofile = "shortlived"',
+        ),
+    )
+
+    assert load(config).get_domains()[0].profile == "shortlived"
+
+
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        ("a.com colour=blue", "unknown option 'colour'"),
+        ("a.com profile=", "invalid profile"),
+    ],
+)
+def test_bad_domain_options_are_rejected(ini_dir, line, message):
+    write(ini_dir, "domains", line + "\n")
+
+    with pytest.raises(ConfigError, match=message):
+        load(ini_dir / "lematt.conf").get_domains()

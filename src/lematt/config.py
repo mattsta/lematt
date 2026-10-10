@@ -109,6 +109,7 @@ class DomainConfig:
 
     primary_domain: str
     san_domains: list[str] = field(default_factory=list)
+    profile: str | None = None  # ACME profile (None: the global default)
 
     @property
     def all_domains(self) -> list[str]:
@@ -207,6 +208,7 @@ class LemattConfig:
     ec_curve: str = "prime256v1"
     rsa_tag: str = ""
     curve_tag: str = ""
+    profile: str | None = None  # default ACME profile (None: the CA's default)
 
     # Runtime settings
     is_test: bool = False
@@ -252,6 +254,10 @@ class LemattConfig:
 
     def key_tag(self, key_type: KeyType) -> str:
         return self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
+
+    def profile_for(self, domain_config: DomainConfig) -> str | None:
+        """The ACME profile for a certificate (its own, else the default)."""
+        return domain_config.profile or self.profile
 
     def cert_id(self, domain_config: DomainConfig, key_type: KeyType) -> str:
         """Stable identifier for one certificate (its name set and key)."""
