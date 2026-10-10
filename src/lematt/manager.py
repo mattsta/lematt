@@ -690,12 +690,34 @@ class CertificateManager:
                 procs = prepare_runner.prepare_domain(domain, domain_actions)
                 prepared_processes.extend(procs)
 
-            return [
-                self.process_domain(domain_config, p.key_type, plan=p, session=session)
-                for p in plans
-            ]
+            return [self._process_isolated(domain_config, p, session) for p in plans]
         finally:
             prepare_runner.cleanup(prepared_processes)
+
+    def _process_isolated(
+        self, domain_config: DomainConfig, plan: RenewalPlan, session: AcmeSession
+    ) -> CertificateResult:
+        """process_domain(), turning an unexpected error into a failed result.
+
+        One key type's crash must not discard the other key type's
+        certificate (which then wouldn't be deployed), and it still counts
+        toward the failure backoff.
+        """
+        try:
+            return self.process_domain(
+                domain_config, plan.key_type, plan=plan, session=session
+            )
+        except Exception as e:
+            logger.exception(f"Unexpected error renewing {plan.state.cert_id}")
+            with contextlib.suppress(Exception):
+                self.record_failure(plan, RequestFailure(f"unexpected error: {e}"))
+            return CertificateResult(
+                domain_config=domain_config,
+                key_type=plan.key_type,
+                success=False,
+                renewed=True,
+                error_message=f"Unexpected error: {e}",
+            )
 
     def process_domain(
         self,

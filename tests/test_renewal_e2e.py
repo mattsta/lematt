@@ -452,3 +452,25 @@ def test_long_retry_after_is_left_to_the_backoff(monkeypatch, setup):
     state = StateStore(base / "test" / "state").load_cert("mail.example.org.rsa2048")
     gap = state.attempts.next_attempt_after - state.attempts.last_failure
     assert gap == datetime.timedelta(hours=2)
+
+
+def test_one_key_types_crash_keeps_the_others_certificate(monkeypatch, setup):
+    base, _, log = setup
+    real = lematt.manager.CertificateManager.request_certificate
+
+    def ec_crashes(self, csr_path, output_path, *args, **kwargs):
+        if "prime256v1" in output_path:
+            raise KeyError("identifier")  # e.g. malformed CA response
+        return real(self, csr_path, output_path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        lematt.manager.CertificateManager, "request_certificate", ec_crashes
+    )
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 1
+
+    store = StateStore(base / "test" / "state")
+    assert store.load_cert("mail.example.org.rsa2048").issued.issued_at is not None
+    ec = store.load_cert("mail.example.org.prime256v1")
+    assert ec.attempts.consecutive_failures == 1
+    assert "reload mail.example.org" in log.read_text()  # RSA was still deployed

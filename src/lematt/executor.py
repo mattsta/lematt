@@ -48,6 +48,11 @@ def _get_domain_lock(domain: str) -> Any:
     return _domain_locks[domain]
 
 
+def _exit_on_sigterm(signum: int, frame: object) -> None:
+    """Unwind a terminated worker so `finally` blocks kill prepare processes."""
+    raise SystemExit(128 + signum)
+
+
 def _worker_init(
     config: LemattConfig, domain_locks: dict[str, Any] | None = None
 ) -> None:
@@ -61,6 +66,7 @@ def _worker_init(
     _domain_locks = domain_locks
     setup_logging(verbose=config.verbose, cron=config.is_cron, test_mode=config.is_test)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
 
 
 def _process_domain_worker(
@@ -150,7 +156,8 @@ class CertificateExecutor:
     - Error isolation: one certificate's failure doesn't affect others
     - Progress tracking: per-task status, logged as it changes
     - Graceful shutdown: first SIGINT/SIGTERM finishes in-flight work and
-      skips the rest; a second one cancels immediately
+      skips the rest; a second one terminates running workers (after their
+      prepare processes are stopped)
     """
 
     config: LemattConfig
@@ -201,7 +208,9 @@ class CertificateExecutor:
         )
         if self._pool is not None:
             logger.warning("Forcefully terminating worker processes...")
-            self._pool.shutdown(wait=False, cancel_futures=True)
+            # Stop running workers too; they turn SIGTERM into SystemExit so
+            # their cleanup (killing prepare processes) still runs
+            self._pool.terminate_workers()
         self._restore_signal_handlers()
         raise KeyboardInterrupt("Forced shutdown by user")
 

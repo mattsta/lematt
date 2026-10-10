@@ -104,3 +104,27 @@ def test_parallel_workers_receive_prepare_locks(config, capfd):
     err = capfd.readouterr().err
     assert "Acquiring lock for domain: www.example.com" in err
     assert "Released lock for domain: www.example.com" in err
+
+
+def test_terminated_workers_unwind_for_cleanup():
+    import signal
+
+    with pytest.raises(SystemExit) as exited:
+        lematt.executor._exit_on_sigterm(signal.SIGTERM, None)
+    assert exited.value.code == 143
+
+
+def test_second_signal_terminates_running_workers(config):
+    terminated = []
+
+    class Pool:
+        def terminate_workers(self):
+            terminated.append(True)
+
+    executor = CertificateExecutor(config, max_workers=2)
+    executor._pool = Pool()
+    executor._signal_handler(2, None)  # first: graceful
+    assert terminated == []
+    with pytest.raises(KeyboardInterrupt):
+        executor._signal_handler(2, None)
+    assert terminated == [True]
