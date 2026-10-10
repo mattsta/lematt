@@ -34,6 +34,18 @@ lematt now keeps state between runs.
 - **systemd units** from `--install-systemd` changed: explicit
   `--prod`/`--test`, `--cron`, the installing Python, no sandboxing, no
   bash notifier. Re-run `--install-systemd`, or use `--print-systemd-units`.
+- **`--health-check` exits 3 for unknown** (a certificate that doesn't
+  parse, a live check that timed out, or a configuration that doesn't
+  load), following the monitoring-plugin convention. It used to exit 0 or 1.
+- **`--validate-config` checks what a run needs**: it fails when the
+  challenge directory is missing or the account key doesn't load.
+- **`custom_command` is split like a shell command line**, so it can carry
+  arguments. Quote a command path that contains spaces.
+- **`--report`**: an explicit `--report-format` wins over the
+  `--report-output` extension, and JSON/Markdown without `--report-output`
+  goes to stdout. The JSON `config` object reports real values
+  (`cert_directory`, `key_directory`, `challenge_directory`, ...) and no
+  longer has `webroot_path`.
 - **Python 3.14+**, and `cryptography` and `httpx` are required
   dependencies.
 
@@ -62,6 +74,16 @@ lematt now keeps state between runs.
   Revoked certificates are renewed promptly, shown in `--status` and health
   checks, recorded in history and notified.
 - EC P-256/P-384 ACME account keys.
+- Warnings, with a "did you mean" suggestion, for unknown keys anywhere in
+  the configuration (a TOML `uploadCerts` used to be dropped silently), for
+  names listed in several action groups, and for certificates whose names
+  span action groups.
+- `--help-topic`, `--help-search` and `--init-toml` work without
+  `--prod`/`--test`.
+- `--list-domains` shows each certificate's ACME profile, and the
+  `--status --json` summary counts every status (`revoked`, `parse_error`,
+  `unknown` too).
+- Markdown reports list certificate paths and deployment actions.
 
 ### Changed
 
@@ -80,6 +102,9 @@ lematt now keeps state between runs.
   uses `cryptography`.
 - One configuration loader validates everything with one-line error messages.
 - `--report` renewal schedules use the renewal policy.
+- New key directories are created with mode 0700.
+- `CERTS`, `KEYS`, `DOMAINS_CN` and `DOMAINS_ALL` expand in a stable order.
+- `--help-search` also matches topic text, after title and keyword matches.
 
 ### Removed
 
@@ -92,6 +117,13 @@ lematt now keeps state between runs.
 - The systemd bash notifier (`lematt-notify.sh`, `notify.conf`,
   `--init-notifications`) and the `weekly` systemd preset.
 - `RateLimiter`, `WorkerResult` and the executor's `rate_limit` argument.
+- Unused Python API pieces:
+  - the display helpers (`create_*_table/tree/summary/progress`,
+    `print_banner`, `print_success/warning/error/info`, `DisplayConfig`)
+  - `generate_quick_report`
+  - `NotificationManager.notify_renewal_success/failure` and
+    `notify_expiry_warning`
+  - `ActionRunner.domain_actions`
 
 ### Fixed
 
@@ -116,3 +148,13 @@ lematt now keeps state between runs.
   Python 3.14, and their progress updates were dropped.
 - The dashboard showed no data until the second refresh, never showed status
   icons, and didn't color the days-left column.
+- `--dashboard-compact` did nothing; it now hides certificate paths, and `c`
+  toggles them.
+- Reports always showed "N/A" for the certificate directory and webroot.
+  `--report-format json|markdown` without `--report-output` printed the
+  console report, and other output extensions silently wrote nothing.
+- `--test-notification` reported PagerDuty as sent while it skipped the test
+  event; skipped backends are now listed as skipped. It also no longer
+  requires the challenge directory.
+- `--check-live` results didn't update the health summary, and a live
+  warning didn't raise an otherwise-unknown status.
