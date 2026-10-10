@@ -20,7 +20,9 @@ def conf(tmp_path):
         f"accountKey: {tmp_path / 'account.key'}\n"
         "reauthorizeDays: 30\n"
     )
-    (tmp_path / "domains").write_text("example.com www mail\nb.org\n")
+    (tmp_path / "domains").write_text(
+        "example.com www mail\nb.org profile=shortlived\n"
+    )
     (tmp_path / "actions.conf").write_text(
         '[default]\nupdate: ["true"]\n'
         "[override-b]\ndomains: b.org\n"
@@ -43,16 +45,31 @@ def test_list_domains_json(monkeypatch, conf, capsys):
             "primary": "example.com",
             "sans": ["www.example.com", "mail.example.com"],
             "all_domains": ["example.com", "www.example.com", "mail.example.com"],
+            "profile": None,
         },
-        {"primary": "b.org", "sans": [], "all_domains": ["b.org"]},
+        {
+            "primary": "b.org",
+            "sans": [],
+            "all_domains": ["b.org"],
+            "profile": "shortlived",
+        },
     ]
 
 
 def test_status_json_reports_missing_certificates(monkeypatch, conf, capsys):
     assert run(monkeypatch, conf, "--status", "--json") == 0
-    status = json.loads(capsys.readouterr().out)
-    assert status["summary"]["total"] == 4
-    assert status["summary"]["missing"] == 4
+    summary = json.loads(capsys.readouterr().out)["summary"]
+    assert summary == {
+        "total": 4,
+        "ok": 0,
+        "renew_soon": 0,
+        "critical": 0,
+        "expired": 0,
+        "missing": 4,
+        "revoked": 0,
+        "parse_error": 0,
+        "unknown": 0,
+    }
 
 
 def test_validate_config(monkeypatch, conf):

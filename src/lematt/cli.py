@@ -581,6 +581,7 @@ def cmd_list_domains(ctx: Context) -> int:
                         "primary": d.primary_domain,
                         "sans": d.san_domains,
                         "all_domains": d.all_domains,
+                        "profile": ctx.config.profile_for(d),
                     }
                     for d in ctx.domains
                 ],
@@ -594,6 +595,8 @@ def cmd_list_domains(ctx: Context) -> int:
         logger.info(f"{i:3}. {d.primary_domain}")
         if d.san_domains:
             logger.info(f"     SANs: {', '.join(d.san_domains)}")
+        if profile := ctx.config.profile_for(d):
+            logger.info(f"     Profile: {profile}")
     return 0
 
 

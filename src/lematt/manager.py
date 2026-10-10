@@ -4,6 +4,7 @@ This module provides the CertificateManager class that encapsulates
 all certificate generation, renewal, and management operations.
 """
 
+import collections
 import contextlib
 import datetime
 import os
@@ -131,6 +132,18 @@ MAX_RETRY_WAIT = 60.0
 
 # Wait before re-checking ARI after a failed check (RFC 9773 asks for backoff)
 ARI_RETRY_AFTER_ERROR = datetime.timedelta(hours=1)
+
+# Every `status` value in --status output, in summary order
+CERTIFICATE_STATUSES = (
+    "ok",
+    "renew_soon",
+    "critical",
+    "expired",
+    "missing",
+    "revoked",
+    "parse_error",
+    "unknown",
+)
 
 
 @dataclass
@@ -1045,19 +1058,12 @@ class CertificateManager:
         status_data = self.get_status_data(domains)
 
         if json_output:
+            counts = collections.Counter(s["status"] for s in status_data)
             return {
                 "certificates": status_data,
                 "summary": {
                     "total": len(status_data),
-                    "ok": sum(1 for s in status_data if s["status"] == "ok"),
-                    "renew_soon": sum(
-                        1 for s in status_data if s["status"] == "renew_soon"
-                    ),
-                    "critical": sum(
-                        1 for s in status_data if s["status"] == "critical"
-                    ),
-                    "expired": sum(1 for s in status_data if s["status"] == "expired"),
-                    "missing": sum(1 for s in status_data if s["status"] == "missing"),
+                    **{status: counts[status] for status in CERTIFICATE_STATUSES},
                 },
             }
 

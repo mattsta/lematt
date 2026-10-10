@@ -577,14 +577,18 @@ usage: lematt [-h] [--prod | --test] [--cron] [--parallel N] [--config PATH]
     "renew_soon": 1,
     "critical": 0,
     "expired": 0,
-    "missing": 1
+    "missing": 1,
+    "revoked": 0,
+    "parse_error": 0,
+    "unknown": 0
   }
 }
 ```
 
 - `status` is one of `ok`, `renew_soon` (renewal due or backing off),
   `critical` (under 1/10 of the lifetime left), `expired`, `missing`,
-  `revoked`, `parse_error` or `unknown`. The summary counts the first five.
+  `revoked`, `parse_error` or `unknown`. The summary counts each status, so
+  the counts add up to `total`.
 - `renewal.basis` says what set the renewal time: `ari`, `lifetime`,
   `reauthorizeDays`, `generateNewCertsAfterDays`, `missing`, `unreadable`,
   `revoked` or `forced`. `blocked_until` is set while lematt backs off
@@ -599,10 +603,14 @@ usage: lematt [-h] [--prod | --test] [--cron] [--parallel N] [--config PATH]
   {
     "primary": "example.com",
     "sans": ["www.example.com", "api.example.com"],
-    "all_domains": ["example.com", "www.example.com", "api.example.com"]
+    "all_domains": ["example.com", "www.example.com", "api.example.com"],
+    "profile": null
   }
 ]
 ```
+
+`profile` is the ACME profile lematt requests for the certificate (its own
+or the global one); `null` means the CA's default.
 
 ---
 
