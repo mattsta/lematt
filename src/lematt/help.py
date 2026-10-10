@@ -63,8 +63,9 @@ under `test/`). Always validate changes with `--test` first.
 
 ## Options
 
-- `--config PATH`: Path to lematt.conf (default: conf/lematt.conf);
-  `domains` and `actions.conf` are read from the same directory
+- `--config PATH`: lematt.conf or a .toml file (default:
+  conf/lematt.conf); `domains` and `actions.conf` are read from the same
+  directory
 - `--domain NAME`: Process only the certificate containing NAME
 - `--force-renew`: Renew even if certificates are not due
 - `--dry-run`: Show what would happen without changing anything
@@ -92,11 +93,11 @@ under `test/`). Always validate changes with `--test` first.
 - 130: Interrupted (after-issue actions still run for renewed certs)
 """,
         examples=[
-            "lematt --test                      # Validate against staging",
-            "lematt --prod --cron               # Scheduled production run",
-            "lematt --prod --domain example.com # One certificate only",
-            "lematt --prod --force-renew        # Renew regardless of expiry",
-            "lematt --prod --dry-run            # Preview changes",
+            "uv run lematt --test                      # Validate against staging",
+            "uv run lematt --prod --cron               # Scheduled production run",
+            "uv run lematt --prod --domain example.com # One certificate only",
+            "uv run lematt --prod --force-renew        # Renew regardless of expiry",
+            "uv run lematt --prod --dry-run            # Preview changes",
         ],
         see_also=["status", "domains", "actions"],
         keywords=["renew", "certificate", "acme", "lets encrypt", "cron"],
@@ -134,10 +135,10 @@ replaces it (if `--replace` didn't already). Revocations are recorded in
 the state history and sent to configured notifications.
 """,
         examples=[
-            "lematt --prod --revoke --domain example.com --dry-run",
-            "lematt --prod --revoke --domain example.com --reason superseded --replace",
-            "lematt --prod --revoke --domain example.com --reason keyCompromise --replace --yes",
-            "lematt --prod --revoke --domain old.example.com --reason cessationOfOperation",
+            "uv run lematt --prod --revoke --domain example.com --dry-run",
+            "uv run lematt --prod --revoke --domain example.com --reason superseded --replace",
+            "uv run lematt --prod --revoke --domain example.com --reason keyCompromise --replace --yes",
+            "uv run lematt --prod --revoke --domain old.example.com --reason cessationOfOperation",
         ],
         see_also=["run", "status", "health"],
         keywords=["revoke", "revocation", "compromise", "replace", "key"],
@@ -160,9 +161,9 @@ expiry date and days remaining, then exits.
 - `--list-domains`: List configured certificates and their SANs instead
 """,
         examples=[
-            "lematt --prod --status             # Status table",
-            "lematt --prod --status --json      # JSON for scripting",
-            "lematt --prod --list-domains       # Configured certificates",
+            "uv run lematt --prod --status             # Status table",
+            "uv run lematt --prod --status --json      # JSON for scripting",
+            "uv run lematt --prod --list-domains       # Configured certificates",
         ],
         see_also=["health", "dashboard", "run"],
         keywords=["certificate", "expiry", "check", "info", "list"],
@@ -183,17 +184,20 @@ healthy, warning, critical or unknown, with an exit code for monitoring.
 - `--check-live`: Also connect to each certificate's primary domain on
   port 443 and check the certificate it serves
 - `--warning-days N` / `--critical-days N`: Use fixed day thresholds
-  instead of the lifetime-aware defaults below
+  instead of the lifetime-aware defaults below (14 and 7 days for
+  whichever isn't given)
 - `--json` / `--prometheus`: Machine-readable output
 - `--write-health PATH`: Also write the result (JSON, or Prometheus with
   `--prometheus`) to PATH
 
 ## Checks Performed
 
-1. **Certificate files**: file exists and parses as X.509. By default:
-   - critical when expired or under 1/10 of the lifetime is left
-   - warning when lematt's renewal is overdue (past its due time plus a
-     day), including the failure count and last error
+1. **Certificate files**: critical when missing, revoked or expired;
+   unknown when the file doesn't parse. By default:
+   - critical when under 1/10 of the lifetime is left
+   - warning when lematt's renewal is overdue (past its due time by a
+     day, or by 1/10 of the lifetime if that's shorter), including the
+     failure count and last error
 2. **Live servers** (`--check-live`): TLS handshake with chain and
    hostname verification. Warning when the served certificate has under
    1/4 of its lifetime left (the renewed one probably wasn't deployed);
@@ -206,10 +210,10 @@ healthy, warning, critical or unknown, with an exit code for monitoring.
 - 2: At least one critical
 """,
         examples=[
-            "lematt --prod --health-check",
-            "lematt --prod --health-check --check-live",
-            "lematt --prod --health-check --prometheus --write-health /var/lib/node_exporter/lematt.prom",
-            "lematt --prod --health-check --warning-days 21 --critical-days 7",
+            "uv run lematt --prod --health-check",
+            "uv run lematt --prod --health-check --check-live",
+            "uv run lematt --prod --health-check --prometheus --write-health /var/lib/node_exporter/lematt.prom",
+            "uv run lematt --prod --health-check --warning-days 21 --critical-days 7",
         ],
         see_also=["status", "monitoring", "notifications"],
         keywords=["health", "check", "monitoring", "diagnostics"],
@@ -246,9 +250,9 @@ certificate status and health information.
 | `Esc` | Close the detail view |
 """,
         examples=[
-            "lematt --prod --dashboard",
-            "lematt --prod --dashboard --dashboard-refresh 10",
-            "lematt --prod --dashboard --dashboard-compact",
+            "uv run lematt --prod --dashboard",
+            "uv run lematt --prod --dashboard --dashboard-refresh 10",
+            "uv run lematt --prod --dashboard --dashboard-compact",
         ],
         see_also=["status", "health"],
         keywords=["dashboard", "interactive", "monitor", "live", "tui"],
@@ -280,9 +284,9 @@ them inline. Keys/certificates/CSRs are written below that directory in
 `prod/` or `test/`.
 """,
         examples=[
-            "lematt --test --validate-config",
-            "lematt --test --config /etc/lematt/lematt.conf --list-domains",
-            "lematt --prod --report --report-output report.md",
+            "uv run lematt --test --validate-config",
+            "uv run lematt --test --config /etc/lematt/lematt.conf --list-domains",
+            "uv run lematt --prod --report --report-output report.md",
         ],
         see_also=["configuration", "domains", "actions"],
         keywords=["config", "configuration", "validate", "setup"],
@@ -335,7 +339,7 @@ lifetime is shorter, because it would renew them on every run.
 | `reauthorizeDays` | (unset) | Renew no later than N days before expiry |
 | `generateNewCertsAfterDays` | 0 (off) | Renew once a certificate is N days old |
 | `keyBitsRSA` | 2048 | RSA key size |
-| `curve` | prime256v1 | EC curve (prime256v1 or secp384r1) |
+| `curve` | prime256v1 | EC curve (prime256v1 = secp256r1, or secp384r1) |
 | `alwaysGenerateNewKeys` | no | Rotate keys on every renewal |
 | `rsaTag` / `curveTag` | rsa<bits> / <curve> | Filename tags |
 | `profile` | (CA default) | ACME profile for all certificates (e.g. tlsserver) |
@@ -364,12 +368,15 @@ Every line produces both an RSA and an EC certificate.
 
 ```
 # primary [san ...]
-example.com www mail          # "www" expands to www.example.com
-example.org www.example.org   # full names work too
+# "www" and "mail" expand to www.example.com and mail.example.com
+example.com www mail
+# full names work too
+example.org www.example.org
 corp.example.com intranet hr git wiki
 ```
 
 - Names without a dot are shorthand for `<name>.<primary>`
+- Comments go on their own line (text after a name is read as more names)
 - Up to 100 names per certificate
 - Lines starting with `#` are comments
 - SAN certificates are also symlinked under each SAN's name
@@ -397,7 +404,8 @@ corp.example.com intranet hr git wiki
 - `[every]`: Runs for every renewed certificate, in addition to its
   default/override section
 - `[<any-name>]`: Override for the domains listed in its `domains:` key
-  (space separated)
+  (space separated). Sections match per name, SANs included; keep all
+  names of a certificate in one section
 
 ## Action Keys (JSON lists of shell commands)
 
@@ -411,8 +419,9 @@ corp.example.com intranet hr git wiki
   to the primary names and `DOMAINS_ALL` to every name renewed in this
   section.
 
-Post-renewal actions run once per section for all certificates renewed
-in that run.
+Post-renewal actions run once per section, after all certificates are
+processed, for everything renewed in that run. A failed command is
+logged and doesn't stop the others.
 
 ## Example
 
@@ -420,22 +429,25 @@ in that run.
 [default]
 uploadCerts: ["rsync -avz --chmod=F644 CERTS /etc/ssl/"]
 uploadKeys: ["rsync -avz --chmod=F640 KEYS /etc/ssl/private/"]
-update: ["sudo service nginx reload"]
+update: ["sudo systemctl reload nginx"]
 
 [every]
-uploadCerts: ["rsync -avz CERTS backup:/srv/tls/"]
+uploadCerts: ["rsync -avz CERTS backup.example.net:/srv/tls/"]
 
 [override-mail]
 domains: mail.example.com
-prepare: ["ssh -tt mail-forward http://example.com"]
-update: ["ssh mail-reload-postfix"]
+prepare: ["ssh -tt forwarder.example.net uv run leforward.py --baseurl http://example.com"]
+update: ["ssh mail.example.net sudo systemctl reload postfix"]
 ```
+
+Use `ssh -tt` for prepare commands so the remote process ends with the
+session even when lematt runs without a terminal (cron, systemd).
 """,
         examples=[
             "[override-web]",
             "domains: example.com www.example.com",
-            'uploadCerts: ["rsync -avz CERTS web1:/etc/ssl/"]',
-            'update: ["ssh web1 sudo systemctl reload nginx"]',
+            'uploadCerts: ["rsync -avz CERTS web1.example.net:/etc/ssl/"]',
+            'update: ["ssh web1.example.net sudo systemctl reload nginx"]',
         ],
         see_also=["configuration", "domains", "run"],
         keywords=["actions", "deploy", "upload", "rsync", "reload", "prepare"],
@@ -453,12 +465,15 @@ update: ["ssh mail-reload-postfix"]
 
 - `--print-systemd-units`: Print `lematt-renew.service` and
   `lematt-renew.timer` (e.g. for configuration management to install)
-- `--install-systemd`: Write them to /etc/systemd/system and enable the
-  timer
+- `--install-systemd`: Write them to /etc/systemd/system, then enable
+  and start the timer
 - `--uninstall-systemd`: Disable the timer and remove the units
 - `--systemd-status`: Show timer state (`--json` supported)
 - `--systemd-preset NAME`: Schedule to use
-- `--dry-run`: Show what `--install-systemd` would do
+- `--dry-run`: Show what install or uninstall would do
+
+Pass an absolute `--config`: the service uses the same config path and
+mode as the install command.
 
 The service runs `<this python> -m lematt --config <path> --prod|--test
 --cron` (the mode comes from `--prod`/`--test`), treats exit code 75 (an
@@ -478,10 +493,10 @@ Let's Encrypt recommends checking at least twice a day, so renewals
 follow the CA's renewal windows and shorter certificate lifetimes.
 """,
         examples=[
-            "lematt --prod --print-systemd-units",
-            "lematt --prod --install-systemd --dry-run",
-            "lematt --prod --install-systemd --systemd-preset aggressive",
-            "lematt --test --systemd-status",
+            "uv run lematt --prod --config /etc/lematt/lematt.toml --print-systemd-units",
+            "uv run lematt --prod --config /etc/lematt/lematt.toml --install-systemd --dry-run",
+            "sudo uv run lematt --prod --config /etc/lematt/lematt.toml --install-systemd --systemd-preset aggressive",
+            "uv run lematt --test --systemd-status",
             "systemctl list-timers lematt-renew.timer",
         ],
         see_also=["notifications", "monitoring"],
@@ -504,7 +519,7 @@ certificates yourself.
 Write metrics for the node_exporter textfile collector:
 
 ```bash
-lematt --prod --health-check --prometheus \\
+uv run lematt --prod --health-check --prometheus \\
     --write-health /var/lib/node_exporter/textfile/lematt.prom
 ```
 
@@ -529,13 +544,13 @@ Metrics:
 ## JSON
 
 ```bash
-lematt --prod --health-check --json
-lematt --prod --status --json
+uv run lematt --prod --health-check --json
+uv run lematt --prod --status --json
 ```
 """,
         examples=[
-            "lematt --prod --health-check --prometheus --write-health /var/lib/node_exporter/textfile/lematt.prom",
-            "lematt --prod --health-check --json",
+            "uv run lematt --prod --health-check --prometheus --write-health /var/lib/node_exporter/textfile/lematt.prom",
+            "uv run lematt --prod --health-check --json",
         ],
         see_also=["health", "notifications"],
         keywords=["monitoring", "prometheus", "nagios", "metrics"],
@@ -557,14 +572,16 @@ nothing is sent.
 
 After each renewal run lematt sends one notification per kind:
 - failure: renewals that failed, with the CA's error and next attempt
-- warning: the CA asked for early renewal (ARI explanation URL)
-- success: certificates renewed (only with `notify_on_success = true`)
+- warning: the CA asked for early renewal (ARI explanation URL), and
+  certificates revoked with `--revoke`
+- success: certificates renewed (only with `notify_on_success = true`;
+  `notify_on_failure`/`notify_on_warning` turn the others off)
 
 `--health-check` notifies critical and overdue certificates the same way.
 `--test-notification` sends a test event to every configured backend.
 """,
         examples=[
-            "lematt --test --test-notification",
+            "uv run lematt --test --test-notification",
         ],
         see_also=["systemd", "monitoring", "health"],
         keywords=["notify", "alert", "slack", "email", "webhook"],
@@ -598,7 +615,7 @@ record for its own account and `dns-01`.
 See docs/challenges.md for the design notes and when to implement each.
 """,
         examples=[
-            "example.com www api mail       # names instead of *.example.com",
+            "example.com www api mail",
             "curl -v http://example.com/.well-known/acme-challenge/test",
         ],
         see_also=["domains", "actions", "troubleshooting"],
@@ -657,13 +674,13 @@ per name per hour. Errors say when to retry.
 ## Debugging
 
 ```bash
-lematt --test --verbose --dry-run
-lematt --test --verbose --domain example.com
+uv run lematt --test --verbose --dry-run
+uv run lematt --test --verbose --domain example.com
 journalctl -u lematt-renew
 ```
 """,
         examples=[
-            "lematt --test --verbose --dry-run",
+            "uv run lematt --test --verbose --dry-run",
             "curl http://example.com/.well-known/acme-challenge/test",
             "journalctl -u lematt-renew -f",
         ],
@@ -744,7 +761,7 @@ class HelpRenderer:
             for i, ref in enumerate(topic.see_also):
                 if i > 0:
                     see_also_text.append(", ", style="dim")
-                see_also_text.append(f"lematt help {ref}", style="cyan")
+                see_also_text.append(f"--help-topic {ref}", style="cyan")
             content_parts.append(see_also_text)
 
         return Panel(
@@ -803,7 +820,7 @@ class HelpRenderer:
         if not results:
             return Panel(
                 f"[dim]No results found for '[/dim]{query}[dim]'[/dim]\n\n"
-                "Try `lematt help` to see all available topics.",
+                "Try `uv run lematt --test --help-topic` to list all topics.",
                 title="[bold]Search Results[/bold]",
                 border_style="yellow",
             )
@@ -837,7 +854,9 @@ def print_help(topic_name: str | None = None) -> None:
         # Show overview
         console.print(renderer.render_category_tree(help_system))
         console.print()
-        console.print("[dim]Use 'lematt help <topic>' for detailed help[/dim]")
+        console.print(
+            "[dim]Use 'uv run lematt --test --help-topic <topic>' for detailed help[/dim]"
+        )
 
 
 def search_help(query: str) -> None:

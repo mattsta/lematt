@@ -41,6 +41,15 @@ from lematt.state import RunLockedError, StateStore, parse_timestamp, utcnow
 # Exit code when another renewal run holds the lock (EX_TEMPFAIL)
 EXIT_RUN_LOCKED = 75
 
+USAGE_EXAMPLES = """\
+examples:
+  uv run lematt --test --validate-config      check the configuration
+  uv run lematt --test                        renew against staging
+  uv run lematt --prod --status               when each certificate renews
+  uv run lematt --prod --cron                 scheduled production run
+  uv run lematt --test --help-topic           list detailed help topics
+"""
+
 
 @dataclass
 class Context:
@@ -131,6 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     """The lematt argument parser."""
     parser = argparse.ArgumentParser(
         description="Matt's Let's Encrypt Automation",
+        epilog=USAGE_EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -161,14 +171,17 @@ def build_parser() -> argparse.ArgumentParser:
         dest="concurrency",
         default=1,
         type=int,
-        help="Number of certificates to process in parallel (max 10)",
+        metavar="N",
+        help="Process up to N certificate lines in parallel (max 10)",
     )
     parser.add_argument(
         "--config",
         dest="config",
         type=Path,
         default=Path("conf/lematt.conf"),
-        help="Path to lematt.conf (other configs in same directory)",
+        metavar="PATH",
+        help="lematt.conf or a .toml file; domains, actions.conf and keys live "
+        "next to it (default: conf/lematt.conf)",
     )
     parser.add_argument(
         "-v",
@@ -193,7 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         dest="json_output",
         action="store_true",
-        help="Output status as JSON (use with --status)",
+        help="JSON output for --status, --list-domains, --health-check and "
+        "--systemd-status",
     )
     parser.add_argument(
         "--list-domains",
@@ -211,7 +225,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--domain",
         dest="single_domain",
         default=None,
-        help="Process only a specific domain",
+        metavar="NAME",
+        help="Only the certificate lines containing NAME",
     )
     parser.add_argument(
         "--force-renew",
@@ -325,6 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--warning-days",
         dest="warning_days",
         type=int,
+        metavar="N",
         default=None,
         help="Warn below N days left (default: when renewal is overdue)",
     )
@@ -332,6 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--critical-days",
         dest="critical_days",
         type=int,
+        metavar="N",
         default=None,
         help="Critical below N days left (default: under 1/10 of the lifetime)",
     )
