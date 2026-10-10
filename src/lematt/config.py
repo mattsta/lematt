@@ -74,7 +74,19 @@ class CertificateInfo:
     issuer: str | None = None
     issuer_dn: str | None = None
     serial_number: str | None = None
+    serial_hex: str | None = None
+    ari_id: str | None = None  # RFC 9773 certificate identifier
+    crl_urls: list[str] = field(default_factory=list)
+    key_type: str | None = None  # "rsa" or "ec"
+    key_size: int | None = None  # RSA modulus bits / EC curve bits
     parse_error: str | None = None
+
+    @property
+    def lifetime(self) -> timedelta | None:
+        """Total validity period (notAfter - notBefore)."""
+        if self.not_after is None or self.not_before is None:
+            return None
+        return self.not_after - self.not_before
 
     @property
     def days_until_expiry(self) -> int | None:

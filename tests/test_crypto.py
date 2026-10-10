@@ -154,3 +154,56 @@ def test_health_check_uses_utc_expiry(tmp_path):
     assert health.status == HealthStatus.WARNING
     assert health.days_until_expiry == 10
     assert health.issuer == "C=US, O=Let's Encrypt, CN=YE1"
+
+
+def make_cert(path, *, serial: int, aki: bytes | None, crl: str | None = None):
+    key = ec.generate_private_key(ec.SECP384R1())
+    now = datetime.datetime.now(datetime.UTC)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([]))
+        .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "YE2")]))
+        .public_key(key.public_key())
+        .serial_number(serial)
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=45))
+    )
+    if aki is not None:
+        builder = builder.add_extension(
+            x509.AuthorityKeyIdentifier(aki, None, None), critical=False
+        )
+    if crl:
+        point = x509.DistributionPoint(
+            [x509.UniformResourceIdentifier(crl)], None, None, None
+        )
+        builder = builder.add_extension(x509.CRLDistributionPoints([point]), False)
+    path.write_bytes(builder.sign(key, hashes.SHA384()).public_bytes(Encoding.PEM))
+
+
+def test_ari_id_matches_rfc_9773_example(tmp_path):
+    # RFC 9773 section 4.1: keyIdentifier 69:88:5B:...:D4, serial 0x87654321
+    aki = bytes.fromhex("69885B6B87464041E1B37B847BA0AE2CDE01C8D4")
+    make_cert(tmp_path / "c.pem", serial=0x87654321, aki=aki)
+
+    assert get_certificate_info(tmp_path / "c.pem").ari_id == (
+        "aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"
+    )
+
+
+def test_metadata_for_renewal_and_monitoring(tmp_path):
+    crl = "http://ye2.c.lencr.org/42.crl"
+    make_cert(tmp_path / "c.pem", serial=0x7F, aki=b"\x01\x02", crl=crl)
+
+    info = get_certificate_info(tmp_path / "c.pem")
+
+    assert info.ari_id == "AQI.fw"  # no leading zero needed below 0x80
+    assert info.serial_hex == "7f"
+    assert info.crl_urls == [crl]
+    assert (info.key_type, info.key_size) == ("ec", 384)
+    assert info.lifetime == datetime.timedelta(days=45)
+
+
+def test_ari_id_absent_without_authority_key_identifier(tmp_path):
+    make_cert(tmp_path / "c.pem", serial=5, aki=None)
+
+    assert get_certificate_info(tmp_path / "c.pem").ari_id is None

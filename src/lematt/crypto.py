@@ -1,5 +1,6 @@
 """Key, CSR and certificate handling for lematt (via the cryptography library)."""
 
+import base64
 import datetime
 import os
 import tempfile
@@ -124,6 +125,15 @@ def get_certificate_info(cert_path: str | Path) -> CertificateInfo:
     except x509.ExtensionNotFound:
         san_domains = []
 
+    public_key = cert.public_key()
+    key_type, key_size = (
+        ("rsa", public_key.key_size)
+        if isinstance(public_key, rsa.RSAPublicKey)
+        else ("ec", public_key.curve.key_size)
+        if isinstance(public_key, ec.EllipticCurvePublicKey)
+        else (None, None)
+    )
+
     return CertificateInfo(
         exists=True,
         path=path,
@@ -134,4 +144,44 @@ def get_certificate_info(cert_path: str | Path) -> CertificateInfo:
         issuer=common_name(cert.issuer),
         issuer_dn=", ".join(attr.rfc4514_string() for attr in cert.issuer),
         serial_number=str(cert.serial_number),
+        serial_hex=f"{cert.serial_number:x}",
+        ari_id=ari_cert_id(cert),
+        crl_urls=_crl_urls(cert),
+        key_type=key_type,
+        key_size=key_size,
     )
+
+
+def ari_cert_id(cert: x509.Certificate) -> str | None:
+    """RFC 9773 certificate identifier: base64url(AKI keyIdentifier) "."
+    base64url(DER serial number bytes), or None without an AKI."""
+    try:
+        aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
+    except x509.ExtensionNotFound:
+        return None
+    key_id = aki.value.key_identifier
+    if not key_id:
+        return None
+    serial = cert.serial_number
+    # DER INTEGER content: minimal big-endian two's complement (a leading
+    # zero byte when the high bit would otherwise be set)
+    serial_der = serial.to_bytes(serial.bit_length() // 8 + 1, "big")
+
+    return f"{_b64url(key_id)}.{_b64url(serial_der)}"
+
+
+def _crl_urls(cert: x509.Certificate) -> list[str]:
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.CRLDistributionPoints)
+    except x509.ExtensionNotFound:
+        return []
+    return [
+        name.value
+        for point in ext.value
+        for name in point.full_name or []
+        if isinstance(name, x509.UniformResourceIdentifier)
+    ]
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
