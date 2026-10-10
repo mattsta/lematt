@@ -910,10 +910,10 @@ lematt --test --health-check --warning-days 21 --critical-days 14
       "key_type": "rsa",
       "status": "healthy",
       "message": "Certificate valid for 45 days",
-      "cert_path": "/etc/lematt/prod/cert/example.com-cert.pem",
+      "cert_path": "/etc/lematt/prod/cert/example.com-cert-combined.rsa2048.pem",
       "days_until_expiry": 45,
-      "not_after": "2024-06-15T00:00:00",
-      "issuer": "CN=Let's Encrypt Authority X3"
+      "not_after": "2026-11-24T00:00:00",
+      "issuer": "C=US, O=Let's Encrypt, CN=YR1"
     }
   ]
 }

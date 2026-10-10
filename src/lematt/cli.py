@@ -217,7 +217,7 @@ def main() -> int:
         "--prod",
         dest="is_test",
         action="store_false",
-        help="Use LE production endpoint (5 duplicate certs/domain/week limit)",
+        help="Use LE production endpoint (rate limited: 5 certs per exact name set per week)",
     )
     mode_group.add_argument(
         "--test",

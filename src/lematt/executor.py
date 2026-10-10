@@ -142,12 +142,10 @@ class BatchProgress:
 
 @dataclass
 class RateLimiter:
-    """Token bucket rate limiter for API requests.
+    """Token bucket that paces how fast work is submitted to the worker pool.
 
-    Let's Encrypt limits:
-    - 20 requests/second for new-reg, new-authz, new-cert
-    - 300 pending authorizations per account
-    - 5 duplicate certificates per week
+    This does not limit ACME requests themselves; see
+    https://letsencrypt.org/docs/rate-limits/ for Let's Encrypt's limits.
     """
 
     rate: float = 10.0  # requests per second (conservative default)

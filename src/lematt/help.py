@@ -53,135 +53,117 @@ HELP_TOPICS: dict[str, HelpTopic] = {
         name="run",
         title="Run Certificate Renewal",
         category=HelpCategory.COMMANDS,
-        summary="Execute certificate renewal for all or specific domains",
+        summary="Renew due certificates and run deployment actions",
         content="""
-# lematt run
+# Running lematt
 
-The `run` command executes the certificate renewal workflow. It checks
-certificate expiry, requests new certificates from Let's Encrypt when
-needed, and executes configured deployment actions.
+Every run must choose an endpoint: `--prod` (Let's Encrypt production)
+or `--test` (staging; keys and certificates get a `.test` suffix and live
+under `test/`). Always validate changes with `--test` first.
 
 ## Options
 
-- `--domain, -d`: Renew only specific domains (can be repeated)
-- `--force`: Force renewal even if certificates aren't expiring
-- `--dry-run`: Simulate renewal without making changes
-- `--test`: Use Let's Encrypt staging environment
-- `--concurrent, -c`: Maximum concurrent renewals (default: 4)
+- `--config PATH`: Path to lematt.conf (default: conf/lematt.conf);
+  `domains` and `actions.conf` are read from the same directory
+- `--domain NAME`: Process only the certificate containing NAME
+- `--force-renew`: Renew even if certificates are not due
+- `--dry-run`: Show what would happen without changing anything
+- `--parallel N`: Process up to N certificates concurrently (max 10)
+- `--cron`: Only print output when something is renewed or fails
+- `-v, --verbose`: Show debug output
 
 ## Workflow
 
-1. Load configuration from `lematt.toml`
-2. Check certificate expiry for configured domains
-3. Generate CSRs for certificates needing renewal
-4. Complete ACME HTTP-01 challenges
-5. Download and save new certificates
-6. Execute deployment actions (prepare, upload, update)
+1. Load lematt.conf, domains and actions.conf
+2. For each certificate (RSA and EC), check whether renewal is due
+3. If any key type is due, start the certificate's `prepare` actions
+4. Generate keys/CSRs if missing and complete ACME http-01 challenges
+5. Save the issued certificates and stop the `prepare` actions
+6. Run `uploadCerts`, `uploadKeys` and `update` actions once per action
+   group for everything that was renewed
 
 ## Exit Codes
 
-- 0: All renewals successful
-- 1: Some renewals failed
-- 2: Configuration error
+- 0: Success (nothing failed)
+- 1: A certificate failed, or the configuration is invalid
+- 130: Interrupted (after-issue actions still run for renewed certs)
 """,
         examples=[
-            "lematt run                          # Renew all certificates",
-            "lematt run --domain example.com    # Renew specific domain",
-            "lematt run --force                 # Force renewal",
-            "lematt run --dry-run               # Preview changes",
-            "lematt run --test                  # Use staging server",
+            "lematt --test                      # Validate against staging",
+            "lematt --prod --cron               # Scheduled production run",
+            "lematt --prod --domain example.com # One certificate only",
+            "lematt --prod --force-renew        # Renew regardless of expiry",
+            "lematt --prod --dry-run            # Preview changes",
         ],
-        see_also=["status", "health", "config"],
-        keywords=["renew", "certificate", "acme", "lets encrypt"],
+        see_also=["status", "domains", "actions"],
+        keywords=["renew", "certificate", "acme", "lets encrypt", "cron"],
     ),
     "status": HelpTopic(
         name="status",
         title="Check Certificate Status",
         category=HelpCategory.COMMANDS,
-        summary="Display current certificate status and expiry information",
+        summary="Display certificate expiry information",
         content="""
-# lematt status
+# Certificate Status
 
-The `status` command displays the current state of all configured
-certificates including expiry dates, health status, and deployment info.
+`--status` lists every configured certificate (RSA and EC) with its
+expiry date and days remaining, then exits.
 
 ## Options
 
-- `--domain, -d`: Check only specific domains
-- `--json`: Output in JSON format
-- `--prometheus`: Output in Prometheus metrics format
-- `--verbose, -v`: Show additional details
-
-## Output Columns
-
-- **Status**: Health indicator (✓ healthy, ⚠ warning, ✗ critical)
-- **Domain**: Primary domain name
-- **Type**: Key type (RSA or EC)
-- **Expires**: Certificate expiry date
-- **Days**: Days until expiration
-- **Path**: Certificate file location
-
-## Status Thresholds
-
-- **Healthy**: More than 14 days until expiry
-- **Warning**: 7-14 days until expiry
-- **Critical**: Less than 7 days or expired
+- `--json`: Output status as JSON
+- `--domain NAME`: Only the certificate containing NAME
+- `--list-domains`: List configured certificates and their SANs instead
 """,
         examples=[
-            "lematt status                       # Show all certificates",
-            "lematt status --json               # JSON output for scripting",
-            "lematt status --prometheus         # Metrics for monitoring",
-            "lematt status -v                   # Verbose output",
+            "lematt --prod --status             # Status table",
+            "lematt --prod --status --json      # JSON for scripting",
+            "lematt --prod --list-domains       # Configured certificates",
         ],
         see_also=["health", "dashboard", "run"],
-        keywords=["certificate", "expiry", "check", "info"],
+        keywords=["certificate", "expiry", "check", "info", "list"],
     ),
     "health": HelpTopic(
         name="health",
         title="Health Check System",
         category=HelpCategory.COMMANDS,
-        summary="Comprehensive health checking for certificates and system",
+        summary="Check certificate files (and optionally live servers)",
         content="""
-# lematt health
+# Health Checks
 
-The `health` command performs comprehensive health checks on all
-certificates and the overall system, providing detailed diagnostics.
+`--health-check` inspects every configured certificate file and reports
+healthy, warning, critical or unknown, with an exit code for monitoring.
 
 ## Options
 
-- `--live`: Check live certificates served by servers
-- `--output, -o`: Write results to file
-- `--format, -f`: Output format (json, prometheus, text)
-- `--warning-days`: Days threshold for warnings (default: 14)
-- `--critical-days`: Days threshold for critical (default: 7)
+- `--check-live`: Also connect to each certificate's primary domain on
+  port 443 and check the certificate it serves
+- `--warning-days N`: Warning threshold (default: 14)
+- `--critical-days N`: Critical threshold (default: 7)
+- `--json` / `--prometheus`: Machine-readable output
+- `--write-health PATH`: Also write the result (JSON, or Prometheus with
+  `--prometheus`) to PATH
 
 ## Checks Performed
 
-1. **Certificate File Checks**
-   - File exists and is readable
-   - Valid X.509 format
-   - Expiry date within thresholds
-   - Certificate chain validity
+1. **Certificate files**: file exists, parses as X.509, days until expiry
+   compared against the thresholds
+2. **Live servers** (`--check-live`): TLS handshake with chain and
+   hostname verification, days until the served certificate expires
 
-2. **Live Certificate Checks** (--live)
-   - SSL/TLS connection to server
-   - Certificate matches expected domain
-   - Proper chain presentation
+## Exit Codes
 
-## Integration
-
-Health check output can be integrated with monitoring systems:
-- Prometheus metrics endpoint
-- Nagios/Icinga check scripts
-- JSON for custom integrations
+- 0: All healthy
+- 1: At least one warning
+- 2: At least one critical
 """,
         examples=[
-            "lematt health                       # Check all certificates",
-            "lematt health --live               # Check live servers too",
-            "lematt health -f prometheus -o /var/lib/lematt/metrics",
-            "lematt health --warning-days 30    # Custom thresholds",
+            "lematt --prod --health-check",
+            "lematt --prod --health-check --check-live",
+            "lematt --prod --health-check --prometheus --write-health /var/lib/node_exporter/lematt.prom",
+            "lematt --prod --health-check --warning-days 21",
         ],
-        see_also=["status", "monitoring", "prometheus"],
+        see_also=["status", "monitoring", "notifications"],
         keywords=["health", "check", "monitoring", "diagnostics"],
     ),
     "dashboard": HelpTopic(
@@ -190,347 +172,246 @@ Health check output can be integrated with monitoring systems:
         category=HelpCategory.COMMANDS,
         summary="Live-updating terminal dashboard for monitoring",
         content="""
-# lematt dashboard
+# Interactive Dashboard
 
-The `dashboard` command launches an interactive terminal dashboard
-with live-updating certificate status and health information.
+`--dashboard` launches a terminal dashboard with live-updating
+certificate status and health information.
 
 ## Options
 
-- `--refresh, -r`: Refresh interval in seconds (default: 5)
-- `--compact`: Use compact display mode
-- `--no-sidebar`: Hide the sidebar
+- `--dashboard-refresh SECONDS`: Refresh interval (default: 5)
+- `--dashboard-compact`: Use compact display mode
+- `--warning-days` / `--critical-days`: Health thresholds
 
 ## Keyboard Controls
 
 | Key | Action |
 |-----|--------|
 | `q` | Quit dashboard |
-| `r` | Force refresh |
+| `r` | Refresh now |
 | `p` | Pause/resume auto-refresh |
-| `c` | Toggle compact mode |
 | `1` | Overview view |
 | `2` | Certificates view |
-| `3` | Health details view |
+| `3` | Health view |
 | `4` | Activity log view |
-
-## Views
-
-1. **Overview**: Summary of system health with quick stats
-2. **Certificates**: Detailed certificate table
-3. **Health**: Extended health information with messages
-4. **Logs**: Activity log showing recent operations
+| `e` | Export the selected certificate as JSON (detail view) |
+| `Esc` | Close the detail view |
 """,
         examples=[
-            "lematt dashboard                    # Launch dashboard",
-            "lematt dashboard --refresh 10      # Slower refresh",
-            "lematt dashboard --compact         # Compact mode",
+            "lematt --prod --dashboard",
+            "lematt --prod --dashboard --dashboard-refresh 10",
+            "lematt --prod --dashboard --dashboard-compact",
         ],
         see_also=["status", "health"],
-        keywords=["dashboard", "interactive", "monitor", "live"],
+        keywords=["dashboard", "interactive", "monitor", "live", "tui"],
     ),
     "config": HelpTopic(
         name="config",
         title="Configuration Commands",
         category=HelpCategory.COMMANDS,
-        summary="View and validate configuration",
+        summary="Validate configuration and generate examples",
         content="""
-# lematt config
+# Configuration Commands
 
-Commands for managing lematt configuration.
+- `--validate-config`: Validate lematt.conf, domains and actions.conf,
+  then print a summary and exit
+- `--list-domains`: Print the configured certificates and exit
+- `--init-toml`: Write an example `lematt.toml` next to `--config`
+  (only its `[notifications]` table is currently read, by
+  `--test-notification`)
+- `--report`: Generate an inventory/renewal report (`--report-output`,
+  `--report-format console|json|markdown`)
 
-## Subcommands
+## Configuration Files
 
-### lematt config show
-
-Display the current configuration in a readable tree format.
-
-### lematt config validate
-
-Validate the configuration file and report any errors.
-
-### lematt config init
-
-Create a new configuration file with example values.
-
-## Configuration File
-
-By default, lematt looks for configuration at:
-1. `./lematt.toml` (current directory)
-2. `/etc/lematt/lematt.toml` (system-wide)
-3. Custom path via `--config` flag
-
-## Validation Checks
-
-- TOML syntax validity
-- Required fields present
-- Path existence verification
-- Domain format validation
-- Action command safety checks
+`--config` points at lematt.conf (default: `conf/lematt.conf`). The
+`domains` and `actions.conf` files are read from the same directory, and
+keys/certificates/CSRs are written below it in `prod/` or `test/`.
 """,
         examples=[
-            "lematt config show                  # Display config",
-            "lematt config validate             # Validate config",
-            "lematt config init                 # Create example config",
-            "lematt --config /path/to/config.toml run",
+            "lematt --test --validate-config",
+            "lematt --test --config /etc/lematt/lematt.conf --list-domains",
+            "lematt --prod --report --report-output report.md",
         ],
         see_also=["configuration", "domains", "actions"],
-        keywords=["config", "configuration", "toml", "setup"],
+        keywords=["config", "configuration", "validate", "setup"],
     ),
     # Configuration topics
     "configuration": HelpTopic(
         name="configuration",
         title="Configuration File Format",
         category=HelpCategory.CONFIGURATION,
-        summary="Complete guide to lematt.toml configuration",
+        summary="Settings in lematt.conf",
         content="""
-# Configuration File Format
+# lematt.conf
 
-lematt uses TOML format for configuration. The file is organized
-into several sections.
+```ini
+[config]
+# Directory served at http://<domain>/.well-known/acme-challenge/
+# for every domain lematt requests certificates for
+challengeDropDir: /srv/web/challenges/
 
-## File Structure
+# ACME account key (RSA): openssl genrsa 4096 > account.key
+accountKey: /etc/ssl/private/lets-encrypt-account.key.pem
 
-```toml
-# Global settings
-[global]
-acme_directory = "https://acme-v02.api.letsencrypt.org/directory"
-cert_directory = "/etc/lematt/certs"
-webroot_path = "/var/www/.well-known/acme-challenge"
-test_mode = false
+# Renew when a certificate has fewer than this many days left
+reauthorizeDays: 30
 
-# Account settings
-[account]
-email = "admin@example.com"
-key_path = "/etc/lematt/account.key"
+# Key settings for the RSA and EC certificate of every domain
+keyBitsRSA: 2048
+curve: prime256v1
 
-# Certificate settings
-[certificates]
-key_types = ["rsa", "ec"]
-rsa_key_size = 2048
-ec_curve = "secp384r1"
-days_before_expiry = 30
-
-# Domain configurations
-[[domains]]
-primary_domain = "example.com"
-san_domains = ["www.example.com"]
-
-# Deployment actions
-[actions.default]
-update_commands = ["systemctl reload nginx"]
+# Generate a new key for every renewal (default: reuse keys)
+alwaysGenerateNewKeys: no
 ```
 
-## Section Reference
+## Keys
 
-See individual help topics for detailed section documentation:
-- `domains` - Domain configuration
-- `actions` - Deployment actions
-- `certificates` - Certificate settings
+| Key | Default | Description |
+|-----|---------|-------------|
+| `challengeDropDir` | (required) | Webroot directory for http-01 tokens |
+| `accountKey` | (required) | ACME account private key |
+| `reauthorizeDays` | 15 | Renew with fewer than N days remaining |
+| `generateNewCertsAfterDays` | 0 (off) | Renew N days after issuance instead |
+| `keyBitsRSA` | 2048 | RSA key size |
+| `curve` | prime256v1 | EC curve (prime256v1 or secp384r1) |
+| `alwaysGenerateNewKeys` | no | Rotate keys on every renewal |
+| `rsaTag` / `curveTag` | rsa<bits> / <curve> | Filename tags |
 """,
         examples=[
-            "# Minimal configuration",
-            "[account]",
-            'email = "admin@example.com"',
-            "",
-            "[[domains]]",
-            'primary_domain = "example.com"',
+            "[config]",
+            "challengeDropDir: /srv/web/challenges/",
+            "accountKey: /etc/ssl/private/lets-encrypt-account.key.pem",
+            "reauthorizeDays: 30",
         ],
         see_also=["domains", "actions", "config"],
-        keywords=["toml", "config", "settings", "format"],
+        keywords=["config", "settings", "format", "ini", "lematt.conf"],
     ),
     "domains": HelpTopic(
         name="domains",
         title="Domain Configuration",
         category=HelpCategory.CONFIGURATION,
-        summary="Configure domains for certificate generation",
+        summary="One certificate per line in the domains file",
         content="""
 # Domain Configuration
 
-Each `[[domains]]` section defines a certificate to manage.
+The `domains` file (next to lematt.conf) defines one certificate per
+line. The first name is the primary name; the rest are added as SANs.
+Every line produces both an RSA and an EC certificate.
 
-## Fields
+## Format
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `primary_domain` | string | Main domain for the certificate |
-| `san_domains` | array | Additional domains (SANs) |
-| `key_types` | array | Override global key types |
-
-## SAN Certificates
-
-You can include up to 100 Subject Alternative Names (SANs) per
-certificate. This is useful for:
-
-- Multiple subdomains: `www`, `api`, `mail`
-- Related domains: `example.com`, `example.org`
-- Wildcard alternatives
-
-## Example Configurations
-
-### Simple Single Domain
-```toml
-[[domains]]
-primary_domain = "example.com"
+```
+# primary [san ...]
+example.com www mail          # "www" expands to www.example.com
+example.org www.example.org   # full names work too
+corp.example.com intranet hr git wiki
 ```
 
-### Domain with SANs
-```toml
-[[domains]]
-primary_domain = "example.com"
-san_domains = ["www.example.com", "api.example.com"]
-```
-
-### Multiple Certificates
-```toml
-[[domains]]
-primary_domain = "example.com"
-san_domains = ["www.example.com"]
-
-[[domains]]
-primary_domain = "api.example.com"
-```
+- Names without a dot are shorthand for `<name>.<primary>`
+- Up to 100 names per certificate
+- Lines starting with `#` are comments
+- SAN certificates are also symlinked under each SAN's name
 """,
         examples=[
-            "[[domains]]",
-            'primary_domain = "example.com"',
-            'san_domains = ["www.example.com", "mail.example.com"]',
+            "example.com www mail",
+            "api.example.com",
         ],
-        see_also=["configuration", "certificates", "actions"],
+        see_also=["configuration", "actions"],
         keywords=["domain", "san", "certificate", "subdomain"],
     ),
     "actions": HelpTopic(
         name="actions",
         title="Deployment Actions",
         category=HelpCategory.ACTIONS,
-        summary="Configure post-renewal deployment actions",
+        summary="Prepare, upload and reload commands per group of domains",
         content="""
-# Deployment Actions
+# Deployment Actions (actions.conf)
 
-Actions are shell commands executed after certificate renewal.
-They're organized into phases and can target specific domains.
+## Sections
 
-## Action Phases
+- `[default]`: Domains without a more specific section
+- `[every]`: Runs for every renewed certificate, in addition to its
+  default/override section
+- `[<any-name>]`: Override for the domains listed in its `domains:` key
+  (space separated)
 
-1. **prepare**: Run before certificate upload
-   - Create directories
-   - Stop services temporarily
+## Action Keys (JSON lists of shell commands)
 
-2. **upload_certs**: Deploy certificate files
-   - rsync to remote servers
-   - Copy to application directories
+- `prepare`: Started (in the background) before certificates for a domain
+  are requested and stopped afterwards, e.g. a remote challenge forwarder
+  over ssh. `DOMAIN` is replaced with the domain being prepared.
+- `uploadCerts`: Runs after renewal. `CERTS` expands to globs matching the
+  renewed certificate files (and their SAN symlinks).
+- `uploadKeys`: Like uploadCerts with `KEYS` for the private keys.
+- `update`: Runs after uploads, e.g. service reloads. `DOMAINS_CN` expands
+  to the primary names and `DOMAINS_ALL` to every name renewed in this
+  section.
 
-3. **upload_keys**: Deploy private keys (separate for security)
-   - rsync with restricted permissions
-   - Secure copy operations
+Post-renewal actions run once per section for all certificates renewed
+in that run.
 
-4. **update**: Run after deployment
-   - Reload services (nginx, apache)
-   - Restart applications
-   - Clear caches
+## Example
 
-## Configuration
+```ini
+[default]
+uploadCerts: ["rsync -avz --chmod=F644 CERTS /etc/ssl/"]
+uploadKeys: ["rsync -avz --chmod=F640 KEYS /etc/ssl/private/"]
+update: ["sudo service nginx reload"]
 
-```toml
-[actions.default]
-# Applies to all domains
-update_commands = ["systemctl reload nginx"]
+[every]
+uploadCerts: ["rsync -avz CERTS backup:/srv/tls/"]
 
-[actions.api-servers]
-# Specific domain group
-domains = ["api.example.com"]
-upload_certs_commands = [
-    "rsync -avz certs/ api1.example.com:/etc/ssl/",
-    "rsync -avz certs/ api2.example.com:/etc/ssl/",
-]
-update_commands = [
-    "ssh api1.example.com systemctl reload nginx",
-    "ssh api2.example.com systemctl reload nginx",
-]
+[override-mail]
+domains: mail.example.com
+prepare: ["ssh -t mail-forward http://example.com"]
+update: ["ssh mail-reload-postfix"]
 ```
-
-## Command Variables
-
-Commands can use these variables:
-- `{domain}`: Primary domain name
-- `{cert_path}`: Full certificate path
-- `{key_path}`: Private key path
-- `{cert_dir}`: Certificate directory
 """,
         examples=[
-            "[actions.webservers]",
-            'domains = ["example.com", "www.example.com"]',
-            "upload_certs_commands = [",
-            '    "rsync -avz {cert_path} web1:/etc/ssl/certs/"',
-            "]",
-            "update_commands = [",
-            '    "ssh web1 systemctl reload nginx"',
-            "]",
+            "[override-web]",
+            "domains: example.com www.example.com",
+            'uploadCerts: ["rsync -avz CERTS web1:/etc/ssl/"]',
+            'update: ["ssh web1 sudo systemctl reload nginx"]',
         ],
         see_also=["configuration", "domains", "run"],
-        keywords=["actions", "deploy", "upload", "rsync", "reload"],
+        keywords=["actions", "deploy", "upload", "rsync", "reload", "prepare"],
     ),
     # Systemd topics
     "systemd": HelpTopic(
         name="systemd",
         title="Systemd Integration",
         category=HelpCategory.SYSTEMD,
-        summary="Automated renewal with systemd timers",
+        summary="Install a systemd timer for scheduled renewals",
         content="""
 # Systemd Integration
 
-lematt can install systemd timer units for automated certificate
-renewal without cron.
-
 ## Commands
 
-### Install Timer
-```bash
-lematt systemd install [--preset NAME]
-```
-
-### Uninstall Timer
-```bash
-lematt systemd uninstall
-```
-
-### Check Status
-```bash
-lematt systemd status
-```
+- `--install-systemd`: Write and enable `lematt-renew.service` and
+  `lematt-renew.timer`, plus `/usr/local/bin/lematt-notify.sh`
+- `--uninstall-systemd`: Disable and remove them
+- `--systemd-status`: Show timer state (`--json` supported)
+- `--systemd-preset NAME`: Schedule for `--install-systemd`
+- `--dry-run`: Print what would be installed
 
 ## Presets
 
-| Preset | Schedule | Description |
-|--------|----------|-------------|
-| `default` | Twice daily | Let's Encrypt recommended |
-| `aggressive` | 4x daily | Frequent checks |
-| `conservative` | Daily at 3 AM | Low frequency |
-| `weekly` | Weekly on Monday | Minimal checks |
+| Preset | Schedule |
+|--------|----------|
+| `default` | Twice daily (00:00 and 12:00, up to 1h random delay) |
+| `aggressive` | Four times daily |
+| `conservative` | Daily at 03:00 |
+| `weekly` | Mondays at 03:00 |
 
-## Generated Units
-
-The installer creates:
-1. `lematt-renew.service` - Renewal service unit
-2. `lematt-renew.timer` - Timer for scheduling
-3. `/usr/local/bin/lematt-notify.sh` - Notification script
-4. `/etc/lematt/notify.conf` - Notification configuration
-
-## Security Hardening
-
-The service unit includes security features:
-- PrivateTmp enabled
-- ProtectSystem=strict
-- ProtectHome=true
-- NoNewPrivileges=true
-- Resource limits (CPU, memory)
+Schedule renewals at least twice a day so certificates are renewed
+promptly when Let's Encrypt shortens lifetimes or asks for early renewal.
 """,
         examples=[
-            "lematt systemd install              # Install with defaults",
-            "lematt systemd install --preset aggressive",
-            "lematt systemd status              # Check timer status",
-            "lematt systemd uninstall           # Remove timer",
-            "systemctl list-timers              # View all timers",
+            "lematt --test --install-systemd --dry-run",
+            "lematt --test --install-systemd --systemd-preset aggressive",
+            "lematt --test --systemd-status",
+            "systemctl list-timers lematt-renew.timer",
         ],
         see_also=["notifications", "monitoring"],
         keywords=["systemd", "timer", "cron", "automation", "schedule"],
@@ -544,61 +425,42 @@ The service unit includes security features:
         content="""
 # Monitoring Integration
 
-lematt supports multiple monitoring system integrations.
+Let's Encrypt no longer sends expiry reminder emails, so monitor
+certificates yourself.
 
-## Prometheus Metrics
+## Prometheus
 
-Export metrics in Prometheus format:
-
-```bash
-lematt health -f prometheus -o /var/lib/lematt/metrics.prom
-```
-
-### Available Metrics
-
-- `lematt_certificate_expiry_days` - Days until expiry (gauge)
-- `lematt_certificate_status` - Health status code (gauge)
-- `lematt_health_check_timestamp_seconds` - Last check time
-- `lematt_certificates_total` - Certificate counts by status
-
-### Prometheus Configuration
-
-```yaml
-scrape_configs:
-  - job_name: 'lematt'
-    static_configs:
-      - targets: ['localhost:9100']
-    metrics_path: /var/lib/lematt/metrics.prom
-```
-
-## Nagios/Icinga Checks
-
-Use the health check script:
+Write metrics for the node_exporter textfile collector:
 
 ```bash
-/var/lib/lematt/healthcheck.sh
+lematt --prod --health-check --prometheus \\
+    --write-health /var/lib/node_exporter/textfile/lematt.prom
 ```
 
-Exit codes:
-- 0: OK (all healthy)
-- 1: WARNING (warnings present)
-- 2: CRITICAL (critical issues)
-- 3: UNKNOWN (check failed)
+Metrics:
 
-## JSON API
+- `lematt_certificate_expiry_days{domain,key_type}`: Days until expiry
+- `lematt_certificate_status{domain,key_type}`: 0=healthy, 1=warning,
+  2=critical, 3=unknown
+- `lematt_health_check_timestamp_seconds`: Time of the check
+- `lematt_certificates_total{status}`: Certificate counts by status
 
-For custom integrations:
+## Nagios/Icinga
+
+`--health-check` exits 0 (OK), 1 (WARNING) or 2 (CRITICAL).
+
+## JSON
 
 ```bash
-lematt health -f json -o /var/lib/lematt/health.json
+lematt --prod --health-check --json
+lematt --prod --status --json
 ```
 """,
         examples=[
-            "lematt health -f prometheus -o /metrics/lematt.prom",
-            "# Prometheus node_exporter textfile collector",
-            "mv /metrics/lematt.prom /var/lib/node_exporter/textfile/",
+            "lematt --prod --health-check --prometheus --write-health /var/lib/node_exporter/textfile/lematt.prom",
+            "lematt --prod --health-check --json",
         ],
-        see_also=["health", "prometheus", "notifications"],
+        see_also=["health", "notifications"],
         keywords=["monitoring", "prometheus", "nagios", "metrics"],
     ),
     "notifications": HelpTopic(
@@ -607,58 +469,34 @@ lematt health -f json -o /var/lib/lematt/health.json
         category=HelpCategory.MONITORING,
         summary="Configure alerts and notifications",
         content="""
-# Notification System
+# Notifications
 
-lematt supports multiple notification channels for alerts.
+## Systemd Failure Alerts
 
-## Supported Channels
-
-1. **Email** - SMTP email notifications
-2. **Webhook** - Slack, Discord, custom webhooks
-3. **PagerDuty** - Incident management
-4. **Ntfy** - Self-hosted push notifications
-5. **Custom** - Run any shell command
-
-## Configuration
-
-Edit `/etc/lematt/notify.conf`:
+`--install-systemd` installs `/usr/local/bin/lematt-notify.sh`, which the
+service runs when a renewal run fails. Configure it in
+`/etc/lematt/notify.conf` (create an example with `--init-notifications`,
+written next to `--config`):
 
 ```bash
-# Email
 NOTIFY_EMAIL="admin@example.com"
-
-# Slack/Discord webhook
 NOTIFY_WEBHOOK="https://hooks.slack.com/services/XXX"
-
-# PagerDuty (failures only)
 PAGERDUTY_KEY="your-integration-key"
-
-# Ntfy
 NTFY_TOPIC="cert-alerts"
 NTFY_SERVER="https://ntfy.sh"
-
-# Custom command
 NOTIFY_CUSTOM_CMD="/usr/local/bin/my-notify.sh"
 ```
 
-## Event Types
+## Notification Backends
 
-- **success**: Certificate renewed successfully
-- **failure**: Renewal failed
-- **warning**: Certificate expiring soon (configurable days)
-
-## Testing
-
-```bash
-/usr/local/bin/lematt-notify.sh success "Test notification"
-/usr/local/bin/lematt-notify.sh failure "Test failure"
-```
+`--test-notification` sends a test event through the backends configured
+in the `[notifications]` table of `lematt.toml` (email, Slack/Discord/
+generic webhook, PagerDuty, ntfy, custom command, journald).
 """,
         examples=[
-            "# /etc/lematt/notify.conf",
-            'NOTIFY_EMAIL="ops@example.com"',
-            'NOTIFY_WEBHOOK="https://hooks.slack.com/..."',
-            'NTFY_TOPIC="infra-alerts"',
+            "lematt --test --init-notifications",
+            "lematt --test --test-notification",
+            "/usr/local/bin/lematt-notify.sh failure 'Test failure'",
         ],
         see_also=["systemd", "monitoring", "health"],
         keywords=["notify", "alert", "slack", "email", "webhook"],
@@ -672,74 +510,55 @@ NOTIFY_CUSTOM_CMD="/usr/local/bin/my-notify.sh"
         content="""
 # Troubleshooting Guide
 
-## Common Issues
+## Challenge Verification Failed
 
-### Challenge Verification Failed
+lematt checks that each challenge file is reachable over plain HTTP
+before asking Let's Encrypt to validate it.
 
-**Symptoms**: ACME challenge fails, certificate not issued
-
-**Causes & Solutions**:
-1. **Firewall blocking port 80**: Ensure HTTP is accessible
-2. **Webroot not configured**: Check nginx/apache configuration
-3. **DNS not propagated**: Wait for DNS changes to propagate
+1. **Port 80 blocked**: Let's Encrypt validates from multiple locations
+   with unpublished IPs; port 80 must be open to everyone
+2. **Webroot mismatch**: `challengeDropDir` must be served at
+   `/.well-known/acme-challenge/` for every name on the certificate
+3. **Remote host**: Use a `prepare` action to forward challenges (see the
+   `actions` topic)
 
 ```bash
-# Test challenge file accessibility
-echo "test" > /var/www/.well-known/acme-challenge/test
-curl -v http://yourdomain.com/.well-known/acme-challenge/test
+echo test > /srv/web/challenges/test
+curl -v http://example.com/.well-known/acme-challenge/test
 ```
 
-### Permission Denied
+## Rate Limited
 
-**Symptoms**: Cannot write certificates, access denied errors
+Let's Encrypt's main limits: 5 certificates per exact set of names per
+7 days (each lematt line issues an RSA and an EC certificate), 50
+certificates per registered domain per 7 days, and 5 failed validations
+per name per hour. Errors say when to retry.
 
-**Solutions**:
-1. Run as root or with sudo
-2. Check directory permissions: `ls -la /etc/lematt/`
-3. Verify SELinux context if applicable
+1. Use `--test` (staging) while changing configuration
+2. Don't `--force-renew` repeatedly in production
+3. Wait for the time given in the error message
 
-### Rate Limit Exceeded
+## Certificate Not Updating on Server
 
-**Symptoms**: "Too many requests" error from Let's Encrypt
+1. Check that the `uploadCerts`/`update` actions succeeded in the output
+2. Verify the service reload worked
+3. Check the certificate path in the server configuration
 
-**Solutions**:
-1. Use `--test` flag for testing (staging server)
-2. Wait for rate limit reset (weekly)
-3. Consolidate domains into fewer certificates
+## Debugging
 
-### Certificate Not Updating on Server
-
-**Symptoms**: Server still shows old certificate
-
-**Solutions**:
-1. Check action commands completed successfully
-2. Verify nginx/apache reload: `systemctl status nginx`
-3. Check certificate path in server config
-
-## Debug Mode
-
-Enable verbose logging:
 ```bash
-lematt run --verbose --debug
+lematt --test --verbose --dry-run
+lematt --test --verbose --domain example.com
+journalctl -u lematt-renew
 ```
-
-## Log Files
-
-- Systemd logs: `journalctl -u lematt-renew`
-- Health status: `/var/lib/lematt/health.json`
 """,
         examples=[
-            "# Debug renewal",
-            "lematt run --verbose --debug --dry-run",
-            "",
-            "# Check challenge accessibility",
-            "curl http://domain.com/.well-known/acme-challenge/test",
-            "",
-            "# View service logs",
+            "lematt --test --verbose --dry-run",
+            "curl http://example.com/.well-known/acme-challenge/test",
             "journalctl -u lematt-renew -f",
         ],
         see_also=["run", "health", "config"],
-        keywords=["debug", "error", "fix", "problem", "issue"],
+        keywords=["debug", "error", "fix", "problem", "issue", "rate limit"],
     ),
 }
 
