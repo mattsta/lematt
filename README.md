@@ -174,12 +174,12 @@ recommends:
 
 State lives in `<config dir>/<prod|test>/state/`:
 
-| Path                 | Contents                                                   |
-| -------------------- | ---------------------------------------------------------- |
-| `account.json`       | ACME account URL (reused instead of re-registering)        |
-| `certs/<cert>.json`  | Issued serial/ARI ID, renewal window, attempt history      |
-| `history.jsonl`      | Append-only event log (issued, renewal_failed, ...)        |
-| `run.lock`           | Held during a run; an overlapping run exits with code 75   |
+| Path                | Contents                                                 |
+| ------------------- | -------------------------------------------------------- |
+| `account.json`      | ACME account URL (reused instead of re-registering)      |
+| `certs/<cert>.json` | Issued serial/ARI ID, renewal window, attempt history    |
+| `history.jsonl`     | Append-only event log (issued, renewal_failed, ...)      |
+| `run.lock`          | Held during a run; an overlapping run exits with code 75 |
 
 Deleting the state directory is safe: lematt rebuilds it from the
 certificates on disk (at the cost of re-checking ARI and forgetting
@@ -221,7 +221,6 @@ lematt --prod --revoke --domain old.example.com --reason cessationOfOperation
 - Revoked certificates show as `revoked` in `--status`, are critical in
   health checks, and are renewed by the next run if `--replace` wasn't used.
   Revocations are recorded in `history.jsonl` and notified.
-
 
 ## Configuration
 
@@ -315,26 +314,26 @@ update = [
 
 #### `[config]` Section
 
-| Key                             | Type   | Default      | Description                            |
-| ------------------------------- | ------ | ------------ | -------------------------------------- |
-| `challenge_dir`                 | string | required     | Directory for ACME challenge files     |
-| `account_key`                   | string | required     | Path to Let's Encrypt account key      |
+| Key                             | Type   | Default      | Description                              |
+| ------------------------------- | ------ | ------------ | ---------------------------------------- |
+| `challenge_dir`                 | string | required     | Directory for ACME challenge files       |
+| `account_key`                   | string | required     | Path to Let's Encrypt account key        |
 | `reauthorize_days`              | float  | unset        | Renew no later than N days before expiry |
-| `generate_new_certs_after_days` | float  | 0.0          | Renew once N days old (0 = disabled)   |
-| `always_generate_new_keys`      | bool   | false        | Generate new keys on each renewal      |
-| `key_bits_rsa`                  | int    | 2048         | RSA key size                           |
-| `ec_curve`                      | string | "prime256v1" | EC curve name                          |
-| `rsa_tag`                       | string | "rsa{bits}"  | Filename tag for RSA certs             |
-| `curve_tag`                     | string | "{curve}"    | Filename tag for EC certs              |
-| `profile`                       | string | unset        | Default ACME profile (e.g. "tlsserver") |
+| `generate_new_certs_after_days` | float  | 0.0          | Renew once N days old (0 = disabled)     |
+| `always_generate_new_keys`      | bool   | false        | Generate new keys on each renewal        |
+| `key_bits_rsa`                  | int    | 2048         | RSA key size                             |
+| `ec_curve`                      | string | "prime256v1" | EC curve name                            |
+| `rsa_tag`                       | string | "rsa{bits}"  | Filename tag for RSA certs               |
+| `curve_tag`                     | string | "{curve}"    | Filename tag for EC certs                |
+| `profile`                       | string | unset        | Default ACME profile (e.g. "tlsserver")  |
 
 #### `[[domains]]` Array
 
-| Key                    | Type         | Default  | Description                       |
-| ---------------------- | ------------ | -------- | --------------------------------- |
-| `primary`              | string       | required | Primary domain name (CN)          |
-| `sans`                 | list[string] | []       | Subject Alternative Names         |
-| `profile`              | string       | unset    | ACME profile for this certificate |
+| Key       | Type         | Default  | Description                       |
+| --------- | ------------ | -------- | --------------------------------- |
+| `primary` | string       | required | Primary domain name (CN)          |
+| `sans`    | list[string] | []       | Subject Alternative Names         |
+| `profile` | string       | unset    | ACME profile for this certificate |
 
 #### `[actions.*]` Tables
 
@@ -495,13 +494,13 @@ update = ["ssh mail reload-postfix"]
 
 ### Key Differences
 
-| Aspect      | INI                       | TOML                                            |
-| ----------- | ------------------------- | ----------------------------------------------- |
-| Lists       | JSON syntax: `["a", "b"]` | Native TOML: `["a", "b"]`                       |
-| Booleans    | `yes`/`no`                | `true`/`false`                                  |
-| Key naming  | camelCase                 | snake_case                                      |
-| Domains     | Separate file             | Inline `[[domains]]` array                      |
-| Actions     | Separate file             | Inline `[actions.*]` tables                     |
+| Aspect     | INI                       | TOML                        |
+| ---------- | ------------------------- | --------------------------- |
+| Lists      | JSON syntax: `["a", "b"]` | Native TOML: `["a", "b"]`   |
+| Booleans   | `yes`/`no`                | `true`/`false`              |
+| Key naming | camelCase                 | snake_case                  |
+| Domains    | Separate file             | Inline `[[domains]]` array  |
+| Actions    | Separate file             | Inline `[actions.*]` tables |
 
 ---
 
@@ -1324,12 +1323,12 @@ lematt --test --test-notification
 
 ### Notification Events
 
-| Event Type | Trigger                            | Default  |
-| ---------- | ---------------------------------- | -------- |
+| Event Type | Trigger                                                                                                 | Default  |
+| ---------- | ------------------------------------------------------------------------------------------------------- | -------- |
 | `failure`  | Renewals failed in a run (with the CA's error and next attempt); certificate critical in a health check | Notify ✓ |
-| `warning`  | CA requested early renewal (ARI explanation); renewal overdue in a health check | Notify ✓ |
-| `success`  | Certificates renewed in a run      | Silent   |
-| `info`     | Informational (test notifications) | Silent   |
+| `warning`  | CA requested early renewal (ARI explanation); renewal overdue in a health check                         | Notify ✓ |
+| `success`  | Certificates renewed in a run                                                                           | Silent   |
+| `info`     | Informational (test notifications)                                                                      | Silent   |
 
 ### Slack Notification Example
 

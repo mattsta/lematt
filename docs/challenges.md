@@ -9,12 +9,12 @@ Status as of 2026-10-10.
 
 ## Challenge types at a glance
 
-| Type             | Let's Encrypt      | lematt            | Proves control by                                   | Wildcards |
-| ---------------- | ------------------ | ----------------- | --------------------------------------------------- | --------- |
-| `http-01`        | Supported          | **Supported**     | Serving a token at `http://<name>/.well-known/acme-challenge/` | No |
-| `dns-01`         | Supported (years)  | Not implemented   | A fresh `_acme-challenge.<name>` TXT record per validation | Yes |
-| `dns-persist-01` | Announced, not live | Not implemented  | One standing `_validation-persist.<name>` TXT record naming the ACME account | Yes, with `policy=wildcard` |
-| `tls-alpn-01`    | Supported          | Not planned       | A special certificate on port 443 via ALPN          | No |
+| Type             | Let's Encrypt       | lematt          | Proves control by                                                            | Wildcards                   |
+| ---------------- | ------------------- | --------------- | ---------------------------------------------------------------------------- | --------------------------- |
+| `http-01`        | Supported           | **Supported**   | Serving a token at `http://<name>/.well-known/acme-challenge/`               | No                          |
+| `dns-01`         | Supported (years)   | Not implemented | A fresh `_acme-challenge.<name>` TXT record per validation                   | Yes                         |
+| `dns-persist-01` | Announced, not live | Not implemented | One standing `_validation-persist.<name>` TXT record naming the ACME account | Yes, with `policy=wildcard` |
+| `tls-alpn-01`    | Supported           | Not planned     | A special certificate on port 443 via ALPN                                   | No                          |
 
 ### http-01 in lematt
 
@@ -45,7 +45,7 @@ so lematt can't issue them. Options, in order of preference:
    everything else. Deploy its output with that client's own hooks.
 3. **Mind your CAA records.** If you published lematt's
    `--caa-records` (`issue "letsencrypt.org; accounturi=…;
-   validationmethods=http-01"`), the other client also needs permission.
+validationmethods=http-01"`), the other client also needs permission.
    Add an `issuewild` record for its account and `dns-01`, for example:
 
    ```
@@ -66,11 +66,11 @@ Design notes for adding it:
     (`_acme-challenge.<name>`) and `VALUE` (base64url of SHA-256 of the
     key authorization)
   - `dnsCleanup`: remove it again
-  Wildcard names (`*.example.com`) would be allowed only on dns-01 lines,
-  and filenames would need the `*` mapped to something safe.
+    Wildcard names (`*.example.com`) would be allowed only on dns-01 lines,
+    and filenames would need the `*` mapped to something safe.
 - **Code.** A `lematt.acme.dns01.Dns01Solver` implementing the existing
   `ChallengeSolver` protocol (`present`/`cleanup`). `AcmeClient.
-  complete_authorizations()` currently always picks http-01; it would pick
+complete_authorizations()` currently always picks http-01; it would pick
   the challenge matching the solver's type instead.
 - **Propagation.** After `dnsPresent`, poll the zone's authoritative name
   servers until every one serves the value (with a timeout) before asking
@@ -94,6 +94,7 @@ _validation-persist.example.com. IN TXT "letsencrypt.org; accounturi=https://acm
 ```
 
 Optional parameters:
+
 - `policy=wildcard`: also covers `*.example.com` and subdomains
 - `persistUntil=<unix seconds>`: the record stops working at that time
   and must be renewed before then
@@ -126,6 +127,7 @@ line up:
   Pebble binary is available in CI.
 
 **When to build it.** Watch for any of these:
+
 - A Let's Encrypt announcement (blog or the API Announcements category on
   community.letsencrypt.org) that dns-persist-01 is in production
 - `dns-persist-01` listed on https://letsencrypt.org/docs/challenge-types/
