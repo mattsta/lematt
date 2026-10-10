@@ -95,10 +95,11 @@ class LemattDashboardApp(App[None]):
 
         self._refresh_timer = None
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         """Set up the dashboard when the app starts."""
-        # Push the main dashboard screen (defined in SCREENS)
-        self.push_screen("dashboard")
+        # Wait until the dashboard's widgets exist so the first data load
+        # has somewhere to go (otherwise it's dropped until the next refresh)
+        await self.push_screen("dashboard")
 
         # Add log entry immediately
         self._add_log("Dashboard initialized")
