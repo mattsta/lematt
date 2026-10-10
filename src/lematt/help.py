@@ -213,20 +213,21 @@ certificate status and health information.
         content="""
 # Configuration Commands
 
-- `--validate-config`: Validate lematt.conf, domains and actions.conf,
-  then print a summary and exit
+- `--validate-config`: Validate the configuration (settings, domains and
+  actions), then print a summary and exit
 - `--list-domains`: Print the configured certificates and exit
 - `--init-toml`: Write an example `lematt.toml` next to `--config`
-  (only its `[notifications]` table is currently read, by
-  `--test-notification`)
 - `--report`: Generate an inventory/renewal report (`--report-output`,
   `--report-format console|json|markdown`)
 
 ## Configuration Files
 
-`--config` points at lematt.conf (default: `conf/lematt.conf`). The
-`domains` and `actions.conf` files are read from the same directory, and
-keys/certificates/CSRs are written below it in `prod/` or `test/`.
+`--config` points at the main config file (default: `conf/lematt.conf`).
+A `.toml` file is read as TOML (`[config]`, optional `[[domains]]` and
+`[actions.*]`); anything else as INI. The `domains` and `actions.conf`
+files are read from the same directory unless the TOML file defines
+them inline. Keys/certificates/CSRs are written below that directory in
+`prod/` or `test/`.
 """,
         examples=[
             "lematt --test --validate-config",
@@ -490,8 +491,9 @@ NOTIFY_CUSTOM_CMD="/usr/local/bin/my-notify.sh"
 ## Notification Backends
 
 `--test-notification` sends a test event through the backends configured
-in the `[notifications]` table of `lematt.toml` (email, Slack/Discord/
-generic webhook, PagerDuty, ntfy, custom command, journald).
+in the `[notifications]` table of the TOML config (or of a `lematt.toml`
+next to an INI config): email, Slack/Discord/generic webhook, PagerDuty,
+ntfy, custom command, journald.
 """,
         examples=[
             "lematt --test --init-notifications",

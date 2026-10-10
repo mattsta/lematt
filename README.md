@@ -43,8 +43,10 @@ uv sync --extra crypto
 ### Generate Example Configuration
 
 ```bash
-# Create example TOML config (recommended for new installations)
+# Create an example lematt.toml next to --config (recommended for new installations)
 lematt --test --init-toml
+# ...edit it, then point --config at it
+lematt --test --config conf/lematt.toml --validate-config
 
 # Or use the existing INI config files in conf/
 ```
@@ -155,7 +157,7 @@ lematt supports two configuration formats:
 | `domains`      | Text   | Domain list, one certificate per line                   |
 | `actions.conf` | INI    | Pre/post certificate actions                            |
 
-lematt auto-detects format: if `lematt.toml` exists, it's used; otherwise falls back to INI files.
+`--config` selects the format by extension: `lematt.toml` (or any `.toml` file) is read as TOML, anything else as INI. With TOML, `[[domains]]` and `[actions.*]` are optional; without them the `domains` and `actions.conf` files in the same directory are used.
 
 ---
 
@@ -1400,8 +1402,12 @@ print(f"Renewed: {summary.renewed_count}, Failed: {summary.failed_count}")
 from pathlib import Path
 from lematt import ConfigLoader
 
-# Load configuration (auto-detects TOML or INI)
-loader = ConfigLoader(config_base=Path("/etc/lematt"))
+# Load a specific file (.toml = TOML, otherwise INI); without config_file,
+# load() looks for lematt.toml, then lematt.conf, in config_base
+loader = ConfigLoader(
+    config_base=Path("/etc/lematt"),
+    config_file=Path("/etc/lematt/lematt.toml"),
+)
 loader.load()
 
 # Get typed configuration

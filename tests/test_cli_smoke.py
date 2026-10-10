@@ -1,6 +1,7 @@
 """End-to-end smoke tests for the read-only CLI commands."""
 
 import json
+import re
 import sys
 
 import pytest
@@ -85,3 +86,16 @@ def test_help_topics_render(monkeypatch, conf):
     for topic in HELP_TOPICS:
         assert run(monkeypatch, conf, "--help-topic", topic) == 0
     assert run(monkeypatch, conf, "--help-search", "rate limit") == 0
+
+
+def test_dry_run_renewal_plans_every_certificate(monkeypatch, conf, capsys):
+    (conf / "account.key").write_text("placeholder")
+
+    assert run(monkeypatch, conf, "--dry-run") == 0
+
+    err = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().err)
+    assert "Renewed: 4, Failed: 0, Skipped: 0" in err
+    assert err.count("[DRY-RUN] Would request certificate") == 4
+    # Post-renewal actions are planned per group with placeholders expanded
+    assert f"[DRY-RUN] Would run: true {conf}/test/cert/b.org*" in err
+    assert "[DRY-RUN] Would run: true\n" in err

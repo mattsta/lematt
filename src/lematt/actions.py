@@ -5,12 +5,11 @@ certificate actions like prepare commands, uploads, and service reloads.
 """
 
 import collections
-import configparser
 import itertools
-import json
 import shlex
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -20,8 +19,8 @@ from lematt.config import (
     CertificateResult,
     DomainActions,
     LemattConfig,
-    warn_obsolete_config_keys,
 )
+from lematt.config_loader import load_actions_ini
 from lematt.log import EVENT
 
 if TYPE_CHECKING:
@@ -64,47 +63,8 @@ class ActionRunner:
             logger.debug(full_message)
 
     def load_actions(self) -> None:
-        """Load actions from actions.conf file."""
-        updaters = configparser.ConfigParser()
-        updaters.read(f"{self.config.config_base}/actions.conf")
-
-        def extract_commands(
-            section_config: configparser.SectionProxy, key: str
-        ) -> list[str]:
-            """Extract command list from section config."""
-            if key in section_config:
-                return json.loads(section_config[key])
-            return []
-
-        # Validate sections
-        for section in ["default", "every"]:
-            if section in updaters and "domains" in updaters[section]:
-                raise ValueError(f"'domains' entry not allowed in section [{section}]")
-
-        # Process all sections
-        for section in updaters.sections():
-            section_config = updaters[section]
-            warn_obsolete_config_keys(section_config, f"actions.conf [{section}]")
-
-            # Build ActionConfig for this section
-            action_config = ActionConfig(
-                name=section,
-                prepare_commands=extract_commands(section_config, "prepare"),
-                upload_certs_commands=extract_commands(section_config, "uploadCerts"),
-                upload_keys_commands=extract_commands(section_config, "uploadKeys"),
-                update_commands=extract_commands(section_config, "update"),
-            )
-
-            if section == "default":
-                self.actions.default = action_config
-            elif section == "every":
-                self.actions.every = action_config
-            else:
-                # Get domains for this action section
-                domains = section_config["domains"].split()
-                action_config.domains = domains
-                for domain in domains:
-                    self.actions.domain_configs[domain] = action_config
+        """Load actions from actions.conf in the configuration directory."""
+        self.actions = load_actions_ini(Path(self.config.config_base) / "actions.conf")
 
     def run_command(
         self,

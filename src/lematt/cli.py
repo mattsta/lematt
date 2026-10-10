@@ -5,7 +5,6 @@ for the lematt certificate management tool.
 """
 
 import argparse
-import configparser
 import contextlib
 import json
 import os
@@ -15,12 +14,8 @@ from pathlib import Path
 from loguru import logger
 
 from lematt.actions import ActionRunner
-from lematt.config import (
-    DomainConfig,
-    LemattConfig,
-    RenewalSummary,
-    drop_obsolete_domain_flags,
-)
+from lematt.config import KeyType, RenewalSummary
+from lematt.config_loader import ConfigError, ConfigLoader
 from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import EVENT, setup_logging
 from lematt.manager import CertificateManager
@@ -36,151 +31,40 @@ except ImportError:
     console = None
 
 
-def load_domains(config_base: str) -> list[DomainConfig]:
-    """Load domain configuration from the domains file.
-
-    Example:
-        example.com www mail
-        other.com www.other.com
+def load_configuration(
+    config_path: str, *, require_write_access: bool
+) -> ConfigLoader | None:
+    """Load and validate the configuration, logging any problems.
 
     Args:
-        config_base: Base configuration directory.
+        config_path: Path given with --config (.toml selects TOML, else INI).
+        require_write_access: Whether the challenge directory must exist.
 
     Returns:
-        List of DomainConfig objects.
+        The loaded configuration, or None if it is unusable.
     """
-    domains: list[DomainConfig] = []
-    domains_file = f"{config_base}/domains"
+    path = Path(config_path)
+    loader = ConfigLoader(
+        config_base=Path(os.path.realpath(path)).parent, config_file=path
+    )
+    try:
+        loader.load()
+    except FileNotFoundError:
+        logger.error(f"Config file not found: {config_path}")
+        return None
+    except ConfigError as e:
+        logger.error(f"Config error: {e}")
+        return None
 
-    with open(domains_file) as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            domain_parts = drop_obsolete_domain_flags(
-                line.split(), f"{domains_file}:{line_num}"
-            )
-
-            if not domain_parts:
-                logger.warning(f"Skipping empty domain line {line_num}")
-                continue
-
-            if len(domain_parts) > 100:
-                logger.error(
-                    f"Domain limit is 100 per certificate, "
-                    f"but configured {len(domain_parts)}: {domain_parts}"
-                )
-                sys.exit(1)
-
-            primary = domain_parts[0]
-            sans: list[str] = []
-
-            for domain in domain_parts[1:]:
-                # Shorthand: subdomain without dot gets primary appended
-                if "." not in domain:
-                    domain = f"{domain}.{primary}"
-                sans.append(domain)
-
-            domains.append(DomainConfig(primary_domain=primary, san_domains=sans))
-
-    return domains
-
-
-def validate_config(
-    config: configparser.SectionProxy,
-    config_base: str,
-    require_write_access: bool = True,
-) -> bool:
-    """Validate configuration values and provide helpful error messages.
-
-    Args:
-        config: Configuration section.
-        config_base: Base configuration directory.
-        require_write_access: Whether write access to challenge dir is required.
-                             Set to False for read-only operations (dashboard, health-check, etc.)
-
-    Returns:
-        True if configuration is valid.
-    """
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    # Required keys - accountKey always required, challenge dir only if write access needed
-    required_keys = ["accountKey"]
-    if require_write_access:
-        required_keys.append("challengeDropDir")
-
-    for key in required_keys:
-        if key not in config or not config[key]:
-            errors.append(f"Missing required config: '{key}'")
-
-    # Validate challenge directory (only if write access needed)
-    if require_write_access and "challengeDropDir" in config:
-        challenge_dir = config["challengeDropDir"]
-        if not os.path.isdir(challenge_dir):
-            errors.append(f"Challenge directory does not exist: {challenge_dir}")
-            errors.append(f"  Create it with: mkdir -p {challenge_dir}")
-
-    # Validate RSA key size
-    if "keyBitsRSA" in config:
-        try:
-            key_bits = int(config["keyBitsRSA"])
-            if key_bits < 2048:
-                warnings.append(
-                    f"RSA key size {key_bits} is insecure. Use at least 2048 bits."
-                )
-            elif key_bits > 4096:
-                warnings.append(
-                    f"RSA key size {key_bits} may cause performance issues. 2048-4096 recommended."
-                )
-        except ValueError:
-            errors.append(
-                f"Invalid keyBitsRSA value: {config['keyBitsRSA']} (must be integer)"
-            )
-
-    # Validate curve
-    valid_curves = ["prime256v1", "secp256r1", "secp384r1", "secp521r1"]
-    if "curve" in config:
-        curve = config["curve"]
-        if curve not in valid_curves:
-            warnings.append(
-                f"EC curve '{curve}' may not be widely supported: {valid_curves}"
-            )
-
-    # Validate reauthorizeDays
-    if "reauthorizeDays" in config:
-        try:
-            days = float(config["reauthorizeDays"])
-            if days < 1:
-                warnings.append(f"reauthorizeDays={days} is very aggressive.")
-            elif days > 89:
-                warnings.append(
-                    f"reauthorizeDays={days} exceeds LE cert lifetime (90 days)."
-                )
-        except ValueError:
-            errors.append(f"Invalid reauthorizeDays value: {config['reauthorizeDays']}")
-
-    # Check domains file
-    domains_file = f"{config_base}/domains"
-    if not os.path.isfile(domains_file):
-        errors.append(f"Domains file not found: {domains_file}")
-
-    # Check actions.conf
-    actions_file = f"{config_base}/actions.conf"
-    if not os.path.isfile(actions_file):
-        errors.append(f"Actions config not found: {actions_file}")
-
+    errors, warnings = loader.validate(require_write_access=require_write_access)
     for warning in warnings:
         logger.warning(f"Config warning: {warning}")
-
     if errors:
         for error in errors:
             logger.error(f"Config error: {error}")
         logger.error("Configuration validation failed.")
-        sys.exit(1)
-
-    return True
+        return None
+    return loader
 
 
 def finish_report(summary: RenewalSummary, *, interrupted: bool = False) -> int:
@@ -565,25 +449,7 @@ def main() -> int:
                     logger.info(f"  Last trigger: {status['last_trigger']}")
             return 0
 
-    # Load configuration
-    config_base = os.path.dirname(os.path.realpath(args.config))
-
-    conf = configparser.ConfigParser()
-    conf["DEFAULT"] = {
-        "reauthorizeDays": "15",
-        "keyBitsRSA": "2048",
-        "alwaysGenerateNewKeys": "no",
-        "generateNewCertsAfterDays": "0",
-        "curve": "prime256v1",
-    }
-
-    if not conf.read(args.config):
-        logger.error(f"Config file not found: {args.config}")
-        return 1
-
-    config = conf["config"]
-
-    # Determine if we're in read-only mode (no challenge dir needed)
+    # Read-only commands don't need the challenge directory
     read_only_mode = (
         args.dashboard
         or args.health_check
@@ -593,40 +459,39 @@ def main() -> int:
         or args.validate_only
     )
 
-    validate_config(config, config_base, require_write_access=not read_only_mode)
+    loader = load_configuration(args.config, require_write_access=not read_only_mode)
+    if loader is None:
+        return 1
+    config_base = str(loader.config_base)
+    lematt_config = loader.get_lematt_config(
+        is_test=args.is_test,
+        is_cron=args.is_cron,
+        is_dry_run=args.dry_run,
+        force_renew=args.force_renew,
+        concurrency=args.concurrency,
+        verbose=args.verbose,
+    )
+    try:
+        domains = loader.get_domains()
+        domain_actions = loader.get_actions()
+    except ConfigError as e:
+        logger.error(f"Config error: {e}")
+        return 1
 
     # Handle --validate-config: just validate and exit
     if args.validate_only:
         logger.info("Configuration is valid!")
         logger.info(f"  Config base: {config_base}")
-        logger.info(f"  Challenge dir: {config['challengeDropDir']}")
-        logger.info(f"  Account key: {config['accountKey']}")
-        logger.info(f"  RSA key bits: {config['keyBitsRSA']}")
-        logger.info(f"  EC curve: {config['curve']}")
-        # Try loading domains to validate that too
-        try:
-            domains = load_domains(config_base)
-            logger.info(f"  Domains configured: {len(domains)}")
-            # Try loading actions to validate that too
-            temp_config = LemattConfig(
-                config_base=config_base,
-                challenge_dir=config.get(
-                    "challengeDropDir", "/tmp/lematt-challenges"
-                ),  # May not exist in read-only mode
-                account_key=config["accountKey"],
-            )
-            action_runner = ActionRunner(temp_config)
-            action_runner.load_actions()
-            action_count = len(action_runner.actions.all_action_names())
-            logger.info(f"  Action configs: {action_count}")
-        except Exception as e:
-            logger.error(f"Validation error: {e}")
-            return 1
+        logger.info(f"  Challenge dir: {lematt_config.challenge_dir}")
+        logger.info(f"  Account key: {lematt_config.account_key}")
+        logger.info(f"  RSA key bits: {lematt_config.rsa_key_bits}")
+        logger.info(f"  EC curve: {lematt_config.ec_curve}")
+        logger.info(f"  Domains configured: {len(domains)}")
+        logger.info(f"  Action configs: {len(domain_actions.all_action_names())}")
         return 0
 
     # Handle --list-domains: list all configured domains and exit
     if args.list_domains:
-        domains = load_domains(config_base)
         if args.json_output:
             domain_list = []
             for d in domains:
@@ -656,26 +521,8 @@ def main() -> int:
             write_health_status_file,
         )
 
-        domains = load_domains(config_base)
-
-        # Build minimal config for path generation
-        rsa_bits = int(config["keyBitsRSA"])
-        curve = config["curve"]
-        health_config = LemattConfig(
-            config_base=config_base,
-            challenge_dir=config.get(
-                "challengeDropDir", "/tmp/lematt-challenges"
-            ),  # Dummy value for read-only
-            account_key=config["accountKey"],
-            rsa_key_bits=rsa_bits,
-            ec_curve=curve,
-            rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
-            curve_tag=config.get("curveTag", curve),
-            is_test=args.is_test,
-        )
-
         checker = HealthChecker(
-            config=health_config,
+            config=lematt_config,
             warning_days=args.warning_days,
             critical_days=args.critical_days,
         )
@@ -744,26 +591,8 @@ def main() -> int:
         from lematt.health import HealthChecker
         from lematt.tui.app import DashboardConfig, LemattDashboardApp
 
-        domains = load_domains(config_base)
-
-        # Build config for health checking
-        rsa_bits = int(config["keyBitsRSA"])
-        curve = config["curve"]
-        dash_config = LemattConfig(
-            config_base=config_base,
-            challenge_dir=config.get(
-                "challengeDropDir", "/tmp/lematt-challenges"
-            ),  # Dummy value for read-only
-            account_key=config["accountKey"],
-            rsa_key_bits=rsa_bits,
-            ec_curve=curve,
-            rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
-            curve_tag=config.get("curveTag", curve),
-            is_test=args.is_test,
-        )
-
         health_checker = HealthChecker(
-            config=dash_config,
+            config=lematt_config,
             warning_days=args.warning_days,
             critical_days=args.critical_days,
         )
@@ -797,29 +626,12 @@ def main() -> int:
         from lematt.health import HealthChecker
         from lematt.reports import generate_full_report
 
-        domains = load_domains(config_base)
-
-        # Build config
-        rsa_bits = int(config["keyBitsRSA"])
-        curve = config["curve"]
-        report_lematt_config = LemattConfig(
-            config_base=config_base,
-            challenge_dir=config.get(
-                "challengeDropDir", "/tmp/lematt-challenges"
-            ),  # Dummy value for read-only
-            account_key=config["accountKey"],
-            rsa_key_bits=rsa_bits,
-            ec_curve=curve,
-            rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
-            curve_tag=config.get("curveTag", curve),
-            is_test=args.is_test,
-        )
+        report_lematt_config = lematt_config
 
         # Add dynamic attributes for report generation
-        from lematt.config import KeyType
-
         report_lematt_config.domains = domains  # type: ignore[attr-defined]
         report_lematt_config.key_types = [KeyType.RSA, KeyType.EC]  # type: ignore[attr-defined]
+        report_lematt_config.actions = domain_actions  # type: ignore[attr-defined]
 
         # Get health data for report
         health_checker = HealthChecker(
@@ -828,15 +640,6 @@ def main() -> int:
             critical_days=args.critical_days,
         )
         health = health_checker.check_all_certificates(domains)
-
-        # Load actions for report (optional)
-        action_runner = ActionRunner(report_lematt_config)
-        try:
-            action_runner.load_actions()
-            # Store actions for report if available
-            report_lematt_config.actions = action_runner.actions  # type: ignore[attr-defined]
-        except Exception:
-            pass  # Actions not required for report
 
         # Determine output format
         output_format = args.report_format
@@ -864,29 +667,31 @@ def main() -> int:
             NotificationEvent,
         )
 
-        # Try to load notification config from TOML if available
+        # Notification settings live in the TOML [notifications] table: the
+        # --config file itself when it's TOML, else lematt.toml beside it
         notify_config = NotificationConfig()
-
-        # Check for TOML config with notification settings
+        nc = loader.notifications
         toml_path = Path(config_base) / "lematt.toml"
-        if toml_path.exists():
-            import tomllib
-
-            with open(toml_path, "rb") as f:
-                toml_data = tomllib.load(f)
-            if "notifications" in toml_data:
-                nc = toml_data["notifications"]
-                notify_config = NotificationConfig(
-                    email_to=nc.get("email_to"),
-                    email_from=nc.get("email_from", "lematt@localhost"),
-                    webhook_url=nc.get("webhook_url"),
-                    webhook_format=nc.get("webhook_format", "slack"),
-                    pagerduty_key=nc.get("pagerduty_key"),
-                    ntfy_topic=nc.get("ntfy_topic"),
-                    ntfy_server=nc.get("ntfy_server", "https://ntfy.sh"),
-                    custom_command=nc.get("custom_command"),
-                    journald_enabled=nc.get("journald_enabled", True),
-                )
+        if not nc and loader.format == "ini" and toml_path.exists():
+            notify_loader = ConfigLoader(Path(config_base), config_file=toml_path)
+            try:
+                notify_loader.load()
+            except ConfigError as e:
+                logger.error(f"Config error: {e}")
+                return 1
+            nc = notify_loader.notifications
+        if nc:
+            notify_config = NotificationConfig(
+                email_to=nc.get("email_to"),
+                email_from=nc.get("email_from", "lematt@localhost"),
+                webhook_url=nc.get("webhook_url"),
+                webhook_format=nc.get("webhook_format", "slack"),
+                pagerduty_key=nc.get("pagerduty_key"),
+                ntfy_topic=nc.get("ntfy_topic"),
+                ntfy_server=nc.get("ntfy_server", "https://ntfy.sh"),
+                custom_command=nc.get("custom_command"),
+                journald_enabled=nc.get("journald_enabled", True),
+            )
 
         manager = notify_config.create_manager()
 
@@ -924,33 +729,7 @@ def main() -> int:
         logger.info(f"All notifications sent successfully: {success_count}")
         return 0
 
-    # Build LemattConfig
-    rsa_bits = int(config["keyBitsRSA"])
-    curve = config["curve"]
-
-    lematt_config = LemattConfig(
-        config_base=config_base,
-        challenge_dir=config["challengeDropDir"],
-        account_key=config["accountKey"],
-        reauthorize_days=float(config["reauthorizeDays"]),
-        generate_new_certs_after_days=float(config["generateNewCertsAfterDays"]),
-        always_generate_new_keys=config.getboolean(
-            "alwaysGenerateNewKeys", fallback=False
-        ),
-        rsa_key_bits=rsa_bits,
-        ec_curve=curve,
-        rsa_tag=config.get("rsaTag", f"rsa{rsa_bits}"),
-        curve_tag=config.get("curveTag", curve),
-        is_test=args.is_test,
-        is_cron=args.is_cron,
-        is_dry_run=args.dry_run,
-        force_renew=args.force_renew,
-        concurrency=min(args.concurrency, 10),  # Cap at 10
-        verbose=args.verbose,
-    )
-
-    # Load domains
-    configured_domains = load_domains(config_base)
+    configured_domains = domains
 
     # Filter to single domain if requested
     if args.single_domain:
@@ -999,9 +778,8 @@ def main() -> int:
     # Ensure directories exist
     cert_manager.ensure_directories()
 
-    # Load actions
-    action_runner = ActionRunner(lematt_config)
-    action_runner.load_actions()
+    # Actions run after the batch for every renewed certificate
+    action_runner = ActionRunner(lematt_config, actions=domain_actions)
 
     # Process certificates using the robust executor
     progress_callback = (

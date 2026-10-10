@@ -1,13 +1,26 @@
-"""Configuration file loaders for lematt.
+"""Configuration file loading for lematt.
 
-This module provides support for loading configuration from both
-INI (legacy) and TOML (modern) formats.
+One loader reads every supported layout and produces the typed objects
+the rest of lematt uses:
+
+- INI: ``lematt.conf`` plus the ``domains`` and ``actions.conf`` files in
+  the same directory.
+- TOML: ``lematt.toml`` with ``[config]``, optional inline ``[[domains]]``
+  and ``[actions.*]`` tables (falling back to the ``domains`` and
+  ``actions.conf`` files when those are absent).
+
+Invalid configuration raises :class:`ConfigError` with an operator-facing
+message.
 """
 
 import configparser
+import json
+import os
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -20,16 +33,188 @@ from lematt.config import (
     warn_obsolete_config_keys,
 )
 
+MAX_NAMES_PER_CERTIFICATE = 100
+
+# Curves Let's Encrypt accepts for certificate keys
+SUPPORTED_CURVES = ("prime256v1", "secp256r1", "secp384r1")
+
+# Sections with fixed meaning in actions configuration
+RESERVED_ACTION_SECTIONS = ("default", "every")
+
+INI_DEFAULTS = {
+    "reauthorizeDays": "15",
+    "keyBitsRSA": "2048",
+    "alwaysGenerateNewKeys": "no",
+    "generateNewCertsAfterDays": "0",
+    "curve": "prime256v1",
+}
+
+
+TOML_SETTING_TYPES: dict[str, type | tuple[type, ...]] = {
+    "challenge_dir": str,
+    "account_key": str,
+    "reauthorize_days": (int, float),
+    "generate_new_certs_after_days": (int, float),
+    "always_generate_new_keys": bool,
+    "key_bits_rsa": int,
+    "ec_curve": str,
+    "rsa_tag": str,
+    "curve_tag": str,
+}
+TOML_TYPE_NAMES: dict[type | tuple[type, ...], str] = {
+    str: "a string",
+    int: "an integer",
+    (int, float): "a number",
+    bool: "true or false",
+}
+
+
+class ConfigError(ValueError):
+    """The configuration is invalid; the message explains what to fix."""
+
+
+# ---------------------------------------------------------------------------
+# Domains
+# ---------------------------------------------------------------------------
+
+
+def make_domain_config(names: list[str], where: str) -> DomainConfig:
+    """Build a certificate definition from its names (primary first).
+
+    Names without a dot are shorthand for ``<name>.<primary>``.
+    """
+    if len(names) > MAX_NAMES_PER_CERTIFICATE:
+        raise ConfigError(
+            f"{where}: {len(names)} names configured, but a certificate holds "
+            f"at most {MAX_NAMES_PER_CERTIFICATE}"
+        )
+    primary = names[0]
+    sans = [name if "." in name else f"{name}.{primary}" for name in names[1:]]
+    return DomainConfig(primary_domain=primary, san_domains=sans)
+
+
+def load_domains_file(path: Path) -> list[DomainConfig]:
+    """Parse a domains file: one certificate per line, primary name first."""
+    domains: list[DomainConfig] = []
+    with path.open() as f:
+        for line_num, raw in enumerate(f, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            where = f"{path}:{line_num}"
+            names = drop_obsolete_domain_flags(line.split(), where)
+            if not names:
+                logger.warning(f"{where}: skipping line without domain names")
+                continue
+            domains.append(make_domain_config(names, where))
+    return domains
+
+
+def domains_from_toml(entries: Iterable[dict[str, Any]]) -> list[DomainConfig]:
+    """Build certificate definitions from TOML ``[[domains]]`` entries."""
+    domains: list[DomainConfig] = []
+    for index, entry in enumerate(entries, 1):
+        where = f"lematt.toml [[domains]] #{index}"
+        primary = entry.get("primary")
+        if not primary:
+            raise ConfigError(f"{where}: missing 'primary'")
+        warn_obsolete_config_keys(entry, f"lematt.toml [[domains]] {primary}")
+        domains.append(make_domain_config([primary, *entry.get("sans", [])], where))
+    return domains
+
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+
+def _add_action_section(
+    result: DomainActions, action: ActionConfig, where: str
+) -> None:
+    """Place one parsed section into the action layout, enforcing its rules."""
+    if action.name in RESERVED_ACTION_SECTIONS:
+        if action.domains:
+            raise ConfigError(f"{where}: 'domains' is not allowed in this section")
+        if action.name == "default":
+            result.default = action
+        else:
+            result.every = action
+        return
+
+    if not action.domains:
+        raise ConfigError(f"{where}: missing 'domains' (which domains it applies to)")
+    for domain in action.domains:
+        result.domain_configs[domain] = action
+
+
+def _ini_commands(values: configparser.SectionProxy, key: str, where: str) -> list[str]:
+    """Read an actions.conf command list (a JSON list of strings)."""
+    if key not in values:
+        return []
+    try:
+        parsed = json.loads(values[key])
+    except json.JSONDecodeError as e:
+        raise ConfigError(
+            f"{where}: '{key}' must be a JSON list of commands ({e})"
+        ) from e
+    if not isinstance(parsed, list) or not all(isinstance(c, str) for c in parsed):
+        raise ConfigError(f"{where}: '{key}' must be a JSON list of strings")
+    return parsed
+
+
+def load_actions_ini(path: Path) -> DomainActions:
+    """Parse actions.conf (missing file means no actions)."""
+    parser = configparser.ConfigParser()
+    parser.read(path)
+    result = DomainActions()
+
+    for section in parser.sections():
+        values = parser[section]
+        where = f"{path.name} [{section}]"
+        warn_obsolete_config_keys(values, where)
+        action = ActionConfig(
+            name=section,
+            prepare_commands=_ini_commands(values, "prepare", where),
+            upload_certs_commands=_ini_commands(values, "uploadCerts", where),
+            upload_keys_commands=_ini_commands(values, "uploadKeys", where),
+            update_commands=_ini_commands(values, "update", where),
+            domains=values.get("domains", "").split(),
+        )
+        _add_action_section(result, action, where)
+
+    return result
+
+
+def actions_from_toml(tables: dict[str, dict[str, Any]]) -> DomainActions:
+    """Build the action layout from TOML ``[actions.*]`` tables."""
+    result = DomainActions()
+    for name, table in tables.items():
+        where = f"lematt.toml [actions.{name}]"
+        warn_obsolete_config_keys(table, where)
+        action = ActionConfig(
+            name=name,
+            prepare_commands=list(table.get("prepare", [])),
+            upload_certs_commands=list(table.get("upload_certs", [])),
+            upload_keys_commands=list(table.get("upload_keys", [])),
+            update_commands=list(table.get("update", [])),
+            domains=list(table.get("domains", [])),
+        )
+        _add_action_section(result, action, where)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Loader
+# ---------------------------------------------------------------------------
+
 
 @dataclass
 class ConfigLoader:
-    """Unified configuration loader supporting INI and TOML formats.
+    """Load lematt configuration from INI or TOML.
 
-    TOML format is recommended for new configurations as it provides:
-    - Native list/array support (no JSON escaping needed)
-    - Better type inference
-    - More readable structure
-    - Comments support
+    Pass ``config_file`` to load a specific file; its extension selects the
+    format (``.toml`` is TOML, anything else INI). Without it, ``load()``
+    looks in ``config_base`` for ``lematt.toml`` and then ``lematt.conf``.
 
     Example TOML config (lematt.toml):
 
@@ -37,85 +222,193 @@ class ConfigLoader:
         challenge_dir = "/var/www/acme-challenge"
         account_key = "/etc/lematt/account.key"
         reauthorize_days = 15
-        key_bits_rsa = 2048
-        ec_curve = "prime256v1"
 
         [[domains]]
         primary = "example.com"
         sans = ["www", "mail"]
 
-        [[domains]]
-        primary = "other.com"
-
         [actions.default]
         update = ["systemctl reload nginx"]
 
         [actions.webservers]
-        domains = ["example.com", "other.com"]
+        domains = ["example.com"]
         upload_certs = ["rsync -avz CERTS /etc/ssl/certs/"]
-        update = ["systemctl reload nginx", "systemctl reload apache2"]
     """
 
     config_base: Path
-    _config_data: dict = field(default_factory=dict)
+    config_file: Path | None = None
+    _config_data: dict[str, Any] = field(default_factory=dict)
     _format: str = field(default="ini")
 
+    @property
+    def format(self) -> str:
+        """The loaded format: ``"ini"`` or ``"toml"``."""
+        return self._format
+
+    @property
+    def settings(self) -> dict[str, Any]:
+        """Normalized ``[config]`` settings (snake_case keys)."""
+        return dict(self._config_data.get("config", {}))
+
+    @property
+    def notifications(self) -> dict[str, Any]:
+        """The TOML ``[notifications]`` table, if any."""
+        return dict(self._config_data.get("notifications", {}))
+
     def load(self) -> None:
-        """Load configuration from available config file.
+        """Read the configuration file.
 
-        Tries TOML first (lematt.toml), falls back to INI (lematt.conf).
+        Raises:
+            FileNotFoundError: The configuration file doesn't exist.
+            ConfigError: The file can't be parsed or has invalid values.
         """
-        toml_path = self.config_base / "lematt.toml"
-        ini_path = self.config_base / "lematt.conf"
-
-        if toml_path.exists():
-            self._load_toml(toml_path)
-            self._format = "toml"
-            logger.debug(f"Loaded TOML config from {toml_path}")
-        elif ini_path.exists():
-            self._load_ini(ini_path)
-            self._format = "ini"
-            logger.debug(f"Loaded INI config from {ini_path}")
+        if self.config_file is not None:
+            path = self.config_file
+            if not path.is_file():
+                raise FileNotFoundError(f"Config file not found: {path}")
+            self._format = "toml" if path.suffix == ".toml" else "ini"
         else:
-            raise FileNotFoundError(
-                f"No configuration file found. Expected {toml_path} or {ini_path}"
-            )
+            toml_path = self.config_base / "lematt.toml"
+            ini_path = self.config_base / "lematt.conf"
+            if toml_path.exists():
+                path, self._format = toml_path, "toml"
+            elif ini_path.exists():
+                path, self._format = ini_path, "ini"
+            else:
+                raise FileNotFoundError(
+                    f"No configuration file found. Expected {toml_path} or {ini_path}"
+                )
+
+        if self._format == "toml":
+            self._load_toml(path)
+        else:
+            self._load_ini(path)
+        logger.debug(f"Loaded {self._format.upper()} config from {path}")
 
     def _load_toml(self, path: Path) -> None:
-        """Load configuration from TOML file."""
-        with open(path, "rb") as f:
-            self._config_data = tomllib.load(f)
+        try:
+            with path.open("rb") as f:
+                self._config_data = tomllib.load(f)
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"{path}: {e}") from e
+
+        for key, value in self._config_data.get("config", {}).items():
+            expected = TOML_SETTING_TYPES.get(key)
+            if expected is None:
+                logger.warning(f"{path}: ignoring unknown [config] key '{key}'")
+            elif not isinstance(value, expected) or isinstance(value, bool) != (
+                expected is bool
+            ):
+                raise ConfigError(
+                    f"{path}: [config] {key} must be {TOML_TYPE_NAMES[expected]}"
+                )
 
     def _load_ini(self, path: Path) -> None:
-        """Load configuration from INI file and convert to common format."""
         parser = configparser.ConfigParser()
-        parser["DEFAULT"] = {
-            "reauthorizeDays": "15",
-            "keyBitsRSA": "2048",
-            "alwaysGenerateNewKeys": "no",
-            "generateNewCertsAfterDays": "0",
-            "curve": "prime256v1",
-        }
-        parser.read(path)
+        parser["DEFAULT"] = INI_DEFAULTS
+        try:
+            parser.read(path)
+        except configparser.Error as e:
+            raise ConfigError(f"{path}: {e}") from e
+        if "config" not in parser:
+            raise ConfigError(f"{path}: missing [config] section")
 
-        # Convert INI to common dict format
-        if "config" in parser:
-            config = parser["config"]
-            self._config_data["config"] = {
+        config = parser["config"]
+
+        def number[T: (int, float)](key: str, kind: type[T]) -> T:
+            try:
+                return kind(config[key])
+            except ValueError as e:
+                raise ConfigError(
+                    f"{path}: invalid {key} value: {config[key]!r}"
+                ) from e
+
+        try:
+            always_new_keys = config.getboolean("alwaysGenerateNewKeys")
+        except ValueError as e:
+            raise ConfigError(f"{path}: alwaysGenerateNewKeys must be yes/no") from e
+
+        self._config_data = {
+            "config": {
                 "challenge_dir": config.get("challengeDropDir", ""),
                 "account_key": config.get("accountKey", ""),
-                "reauthorize_days": float(config.get("reauthorizeDays", "15")),
-                "generate_new_certs_after_days": float(
-                    config.get("generateNewCertsAfterDays", "0")
+                "reauthorize_days": number("reauthorizeDays", float),
+                "generate_new_certs_after_days": number(
+                    "generateNewCertsAfterDays", float
                 ),
-                "always_generate_new_keys": config.getboolean(
-                    "alwaysGenerateNewKeys", fallback=False
-                ),
-                "key_bits_rsa": int(config.get("keyBitsRSA", "2048")),
-                "ec_curve": config.get("curve", "prime256v1"),
+                "always_generate_new_keys": always_new_keys,
+                "key_bits_rsa": number("keyBitsRSA", int),
+                "ec_curve": config.get("curve"),
                 "rsa_tag": config.get("rsaTag", ""),
                 "curve_tag": config.get("curveTag", ""),
             }
+        }
+
+    def validate(
+        self, *, require_write_access: bool = True
+    ) -> tuple[list[str], list[str]]:
+        """Check loaded settings; return ``(errors, warnings)``.
+
+        Args:
+            require_write_access: Whether the challenge directory is needed
+                (False for read-only commands like --status).
+        """
+        errors: list[str] = []
+        warnings: list[str] = []
+        config = self.settings
+        ini = self._format == "ini"
+
+        def key_name(ini_key: str, toml_key: str) -> str:
+            return ini_key if ini else toml_key
+
+        required = [("accountKey", "account_key")]
+        if require_write_access:
+            required.append(("challengeDropDir", "challenge_dir"))
+        for ini_key, toml_key in required:
+            if not config.get(toml_key):
+                errors.append(
+                    f"Missing required config: '{key_name(ini_key, toml_key)}'"
+                )
+
+        challenge_dir = config.get("challenge_dir")
+        if require_write_access and challenge_dir and not os.path.isdir(challenge_dir):
+            errors.append(f"Challenge directory does not exist: {challenge_dir}")
+            errors.append(f"  Create it with: mkdir -p {challenge_dir}")
+
+        key_bits = config.get("key_bits_rsa", 2048)
+        if key_bits < 2048:
+            warnings.append(
+                f"RSA key size {key_bits} is insecure. Use at least 2048 bits."
+            )
+        elif key_bits > 4096:
+            warnings.append(
+                f"RSA key size {key_bits} may cause performance issues. 2048-4096 recommended."
+            )
+
+        curve = config.get("ec_curve", "prime256v1")
+        if curve not in SUPPORTED_CURVES:
+            warnings.append(
+                f"EC curve '{curve}' is not accepted by Let's Encrypt: {list(SUPPORTED_CURVES)}"
+            )
+
+        days = config.get("reauthorize_days", 15.0)
+        if days < 1:
+            warnings.append(f"reauthorizeDays={days} is very aggressive.")
+        elif days > 89:
+            warnings.append(
+                f"reauthorizeDays={days} exceeds LE cert lifetime (90 days)."
+            )
+
+        if not (self._format == "toml" and "domains" in self._config_data):
+            domains_file = self.config_base / "domains"
+            if not domains_file.is_file():
+                errors.append(f"Domains file not found: {domains_file}")
+        if not (self._format == "toml" and "actions" in self._config_data):
+            actions_file = self.config_base / "actions.conf"
+            if not actions_file.is_file():
+                errors.append(f"Actions config not found: {actions_file}")
+
+        return errors, warnings
 
     def get_lematt_config(
         self,
@@ -127,21 +420,8 @@ class ConfigLoader:
         concurrency: int = 1,
         verbose: bool = False,
     ) -> LemattConfig:
-        """Build LemattConfig from loaded configuration.
-
-        Args:
-            is_test: Use staging endpoint.
-            is_cron: Minimize output.
-            is_dry_run: Don't make actual changes.
-            force_renew: Force certificate renewal.
-            concurrency: Number of parallel workers.
-            verbose: Enable verbose logging.
-
-        Returns:
-            LemattConfig instance.
-        """
-        config = self._config_data.get("config", {})
-
+        """Build the runtime LemattConfig from the loaded settings."""
+        config = self.settings
         rsa_bits = config.get("key_bits_rsa", 2048)
         ec_curve = config.get("ec_curve", "prime256v1")
 
@@ -167,155 +447,19 @@ class ConfigLoader:
         )
 
     def get_domains(self) -> list[DomainConfig]:
-        """Load domain configurations.
-
-        For TOML: reads from [[domains]] array in config.
-        For INI: reads from separate domains file.
-
-        Returns:
-            List of DomainConfig instances.
-        """
+        """Certificate definitions: TOML ``[[domains]]`` or the domains file."""
         if self._format == "toml" and "domains" in self._config_data:
-            return self._load_domains_from_toml()
-        return self._load_domains_from_file()
-
-    def _load_domains_from_toml(self) -> list[DomainConfig]:
-        """Load domains from TOML [[domains]] array."""
-        domains: list[DomainConfig] = []
-
-        for entry in self._config_data.get("domains", []):
-            primary = entry.get("primary", "")
-            if not primary:
-                continue
-            warn_obsolete_config_keys(entry, f"lematt.toml [[domains]] {primary}")
-
-            sans = entry.get("sans", [])
-            # Expand shorthand SANs
-            expanded_sans: list[str] = []
-            for san in sans:
-                if "." not in san:
-                    san = f"{san}.{primary}"
-                expanded_sans.append(san)
-
-            domains.append(
-                DomainConfig(primary_domain=primary, san_domains=expanded_sans)
-            )
-
-        return domains
-
-    def _load_domains_from_file(self) -> list[DomainConfig]:
-        """Load domains from separate domains file."""
+            return domains_from_toml(self._config_data["domains"])
         domains_file = self.config_base / "domains"
-        if not domains_file.exists():
+        if not domains_file.is_file():
             return []
-
-        domains: list[DomainConfig] = []
-
-        with open(domains_file) as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-
-                domain_parts = drop_obsolete_domain_flags(
-                    line.split(), f"{domains_file}:{line_num}"
-                )
-                if not domain_parts:
-                    continue
-
-                primary = domain_parts[0]
-                sans: list[str] = []
-
-                for domain in domain_parts[1:]:
-                    if "." not in domain:
-                        domain = f"{domain}.{primary}"
-                    sans.append(domain)
-
-                domains.append(DomainConfig(primary_domain=primary, san_domains=sans))
-
-        return domains
+        return load_domains_file(domains_file)
 
     def get_actions(self) -> DomainActions:
-        """Load action configurations.
-
-        For TOML: reads from [actions.*] tables in config.
-        For INI: reads from separate actions.conf file.
-
-        Returns:
-            DomainActions instance.
-        """
+        """Action layout: TOML ``[actions.*]`` tables or actions.conf."""
         if self._format == "toml" and "actions" in self._config_data:
-            return self._load_actions_from_toml()
-        return self._load_actions_from_ini()
-
-    def _load_actions_from_toml(self) -> DomainActions:
-        """Load actions from TOML [actions.*] tables."""
-        actions_data = self._config_data.get("actions", {})
-        result = DomainActions()
-
-        for name, config in actions_data.items():
-            warn_obsolete_config_keys(config, f"lematt.toml [actions.{name}]")
-            action_config = ActionConfig(
-                name=name,
-                prepare_commands=config.get("prepare", []),
-                upload_certs_commands=config.get("upload_certs", []),
-                upload_keys_commands=config.get("upload_keys", []),
-                update_commands=config.get("update", []),
-                domains=config.get("domains", []),
-            )
-
-            if name == "default":
-                result.default = action_config
-            elif name == "every":
-                result.every = action_config
-            else:
-                # Map domains to this action config
-                for domain in action_config.domains:
-                    result.domain_configs[domain] = action_config
-
-        return result
-
-    def _load_actions_from_ini(self) -> DomainActions:
-        """Load actions from INI actions.conf file."""
-        import json
-
-        actions_file = self.config_base / "actions.conf"
-        if not actions_file.exists():
-            return DomainActions()
-
-        parser = configparser.ConfigParser()
-        parser.read(actions_file)
-
-        result = DomainActions()
-
-        def extract_commands(section: configparser.SectionProxy, key: str) -> list[str]:
-            if key in section:
-                return json.loads(section[key])
-            return []
-
-        for section in parser.sections():
-            section_config = parser[section]
-            warn_obsolete_config_keys(section_config, f"actions.conf [{section}]")
-
-            action_config = ActionConfig(
-                name=section,
-                prepare_commands=extract_commands(section_config, "prepare"),
-                upload_certs_commands=extract_commands(section_config, "uploadCerts"),
-                upload_keys_commands=extract_commands(section_config, "uploadKeys"),
-                update_commands=extract_commands(section_config, "update"),
-            )
-
-            if section == "default":
-                result.default = action_config
-            elif section == "every":
-                result.every = action_config
-            else:
-                domains = section_config.get("domains", "").split()
-                action_config.domains = domains
-                for domain in domains:
-                    result.domain_configs[domain] = action_config
-
-        return result
+            return actions_from_toml(self._config_data["actions"])
+        return load_actions_ini(self.config_base / "actions.conf")
 
 
 def create_example_toml(path: Path) -> None:
@@ -340,7 +484,7 @@ reauthorize_days = 15
 # RSA key size (2048, 3072, or 4096)
 key_bits_rsa = 2048
 
-# EC curve (prime256v1, secp384r1, or secp521r1)
+# EC curve (prime256v1 or secp384r1)
 ec_curve = "prime256v1"
 
 # Always generate new keys on renewal (default: false)
@@ -416,18 +560,6 @@ journald_enabled = true
 notify_on_failure = true
 notify_on_warning = true
 notify_on_success = false
-
-# Systemd timer configuration (used by --install-systemd)
-
-[systemd]
-# Timer schedule (default: twice daily at midnight and noon)
-# calendar = "*-*-* 00,12:00:00"
-
-# Random delay to spread load (seconds)
-# randomized_delay_sec = 3600
-
-# Run missed timers on boot
-# persistent = true
 """
     path.write_text(example)
     logger.info(f"Created example TOML config at {path}")
