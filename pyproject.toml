@@ -78,10 +78,15 @@ select = [
     "SIM",  # simplify
     "RUF",  # ruff-specific
     "PLE",  # pylint errors
+    "PTH",  # pathlib instead of os.path / open()
+    "FURB", # refurb modernizations
+    "PGH",  # pygrep hooks (specific type: ignore codes)
 ]
 ignore = [
     "E501",    # line length (the formatter handles wrapping)
     "RUF001",  # status glyphs like ✓ ✗ ⚠ are intentional
+    "SIM102",  # nested ifs can read better than combined conditions
+    "SIM110",  # explicit loops can read better than any()/all()
 ]
 
 [tool.ruff.lint.pyupgrade]
