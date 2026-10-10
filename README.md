@@ -137,6 +137,44 @@ lematt/
 
 ---
 
+## Renewal Timing and State
+
+lematt decides when to renew each certificate the way Let's Encrypt
+recommends:
+
+1. **ARI first.** Let's Encrypt suggests a renewal window for every
+   certificate (ACME Renewal Information, RFC 9773). lematt checks it
+   (honoring the CA's Retry-After, about twice a day), picks a random
+   moment inside the window, and renews then. The CA can move the window
+   earlier, for example ahead of a mass revocation; the explanation URL
+   is logged.
+2. **Lifetime fallback.** Without ARI data, lematt renews when 1/3 of the
+   certificate's lifetime remains (half for certificates valid less
+   than 10 days). This stays correct as Let's Encrypt shortens lifetimes
+   to 64 days (February 2027) and 45 days (February 2028).
+3. **Operator overrides** (`reauthorizeDays`, `generateNewCertsAfterDays`)
+   can only make renewal earlier.
+4. **Backoff.** After a failed attempt, lematt waits 1 minute, 10
+   minutes, 100 minutes, then a day between attempts, or longer if the
+   CA asks (rate limits), so a broken configuration can't exhaust
+   Let's Encrypt's limits. `--force-renew` retries immediately.
+
+`--status` shows when each certificate renews and why (`renewal` in
+`--status --json`).
+
+State lives in `<config dir>/<prod|test>/state/`:
+
+| Path                 | Contents                                                   |
+| -------------------- | ---------------------------------------------------------- |
+| `account.json`       | ACME account URL (reused instead of re-registering)        |
+| `certs/<cert>.json`  | Issued serial/ARI ID, renewal window, attempt history      |
+| `history.jsonl`      | Append-only event log (issued, renewal_failed, ...)        |
+| `run.lock`           | Held during a run; an overlapping run exits with code 75   |
+
+Deleting the state directory is safe: lematt rebuilds it from the
+certificates on disk (at the cost of re-checking ARI and forgetting
+failure history).
+
 ## Configuration
 
 lematt supports two configuration formats:
@@ -172,8 +210,9 @@ challenge_dir = "/var/www/html/.well-known/acme-challenge"
 # Generate with: openssl genrsa 4096 > account.key
 account_key = "/etc/lematt/account.key"
 
-# Renew certificates this many days before expiration
-reauthorize_days = 15
+# Optional: renew no later than this many days before expiry (renewal
+# otherwise follows the CA; see "Renewal Timing")
+# reauthorize_days = 30
 
 # RSA key size (2048, 3072, or 4096)
 key_bits_rsa = 2048
@@ -232,8 +271,8 @@ update = [
 | ------------------------------- | ------ | ------------ | -------------------------------------- |
 | `challenge_dir`                 | string | required     | Directory for ACME challenge files     |
 | `account_key`                   | string | required     | Path to Let's Encrypt account key      |
-| `reauthorize_days`              | float  | 15.0         | Days before expiry to renew            |
-| `generate_new_certs_after_days` | float  | 0.0          | Renew based on cert age (0 = disabled) |
+| `reauthorize_days`              | float  | unset        | Renew no later than N days before expiry |
+| `generate_new_certs_after_days` | float  | 0.0          | Renew once N days old (0 = disabled)   |
 | `always_generate_new_keys`      | bool   | false        | Generate new keys on each renewal      |
 | `key_bits_rsa`                  | int    | 2048         | RSA key size                           |
 | `ec_curve`                      | string | "prime256v1" | EC curve name                          |
@@ -265,10 +304,10 @@ update = [
 
 ```ini
 [config]
-# Renew this many days before expiration
-reauthorizeDays: 15
+# Optional: renew no later than N days before expiry
+# reauthorizeDays: 30
 
-# OR: Renew when cert is N days old (overrides reauthorizeDays)
+# Optional: renew once a certificate is N days old
 # generateNewCertsAfterDays: 7
 
 # ACME challenge directory
@@ -337,7 +376,7 @@ update: ["ssh mail-server 'systemctl reload postfix'"]
 
 | INI (lematt.conf)              | TOML (lematt.toml)                  |
 | ------------------------------ | ----------------------------------- |
-| `reauthorizeDays: 15`          | `reauthorize_days = 15`             |
+| `reauthorizeDays: 30`          | `reauthorize_days = 30`             |
 | `challengeDropDir: /path`      | `challenge_dir = "/path"`           |
 | `accountKey: /path`            | `account_key = "/path"`             |
 | `keyBitsRSA: 2048`             | `key_bits_rsa = 2048`               |

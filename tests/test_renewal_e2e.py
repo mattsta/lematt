@@ -1,5 +1,6 @@
 """Full renewal runs through the CLI against the fake ACME CA."""
 
+import datetime
 import json
 import os
 import sys
@@ -208,3 +209,87 @@ def test_unknown_saved_account_is_replaced(monkeypatch, setup):
     assert server.count("POST", "/new-account") == 2
     events = [e["event"] for e in StateStore(base / "test" / "state").history()]
     assert events.count("account_registered") == 2
+
+
+def _expire_ari_checks(base, cert_id: str) -> None:
+    """Pretend the CA's Retry-After has passed for a certificate."""
+    store = StateStore(base / "test" / "state")
+    state = store.load_cert(cert_id)
+    state.renewal_info.next_check = datetime.datetime(2000, 1, 1)
+    store.save_cert(state)
+
+
+def test_ari_windows_are_followed_and_respect_retry_after(monkeypatch, setup, capsys):
+    base, server, _ = setup
+    cert_id = "mail.example.org.prime256v1"
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+
+    # Next run checks ARI once per certificate and records the windows
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    assert server.count("GET", "/renewal-info/") == 2
+    store = StateStore(base / "test" / "state")
+    window = store.load_cert(cert_id).renewal_info
+    assert window.window_start <= window.selected_time <= window.window_end
+    assert [e["event"] for e in store.history()].count("renewal_window") == 2
+
+    # Within the CA's Retry-After, ARI isn't asked again
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    assert server.count("GET", "/renewal-info/") == 2
+
+    assert (
+        run(monkeypatch, base, "--status", "--json", "--domain", "mail.example.org")
+        == 0
+    )
+    renewal = json.loads(capsys.readouterr().out)["certificates"][1]["renewal"]
+    assert renewal["basis"] == "ari"
+    assert renewal["ari_window"]["start"] == window.window_start.isoformat()
+
+
+def test_ca_requested_early_renewal_replaces_the_certificate(
+    monkeypatch, setup, capsys
+):
+    base, server, log = setup
+    cert_id = "mail.example.org.prime256v1"
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0  # fetch ARI
+    old = StateStore(base / "test" / "state").load_cert(cert_id).issued
+    log.unlink()
+
+    # The CA pulls the window into the past (e.g. ahead of a revocation)
+    past = datetime.datetime.now(datetime.UTC).replace(
+        tzinfo=None
+    ) - datetime.timedelta(days=1)
+    server.ari_windows[old.ari_id] = (
+        past,
+        past + datetime.timedelta(hours=1),
+        "https://ca.test/incident",
+    )
+    _expire_ari_checks(base, cert_id)
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+
+    err = capsys.readouterr().err
+    assert "https://ca.test/incident" in err
+    assert old.ari_id in server.replaced  # renewal named its predecessor
+    assert server.payloads["new-order"][-1]["replaces"] == old.ari_id
+    new = StateStore(base / "test" / "state").load_cert(cert_id).issued
+    assert new.serial != old.serial
+    assert "reload mail.example.org" in log.read_text()  # deployed as usual
+
+
+def test_already_replaced_falls_back_to_a_plain_order(monkeypatch, setup):
+    base, server, _ = setup
+    cert_id = "mail.example.org.rsa2048"
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    old = StateStore(base / "test" / "state").load_cert(cert_id).issued
+    server.replaced.add(old.ari_id)  # e.g. replaced by another client already
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+
+    rsa_orders = [
+        p for p in server.payloads["new-order"] if p.get("replaces") == old.ari_id
+    ]
+    assert len(rsa_orders) == 1  # the rejected attempt
+    assert (
+        StateStore(base / "test" / "state").load_cert(cert_id).issued.serial
+        != old.serial
+    )

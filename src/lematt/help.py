@@ -75,7 +75,9 @@ under `test/`). Always validate changes with `--test` first.
 ## Workflow
 
 1. Load lematt.conf, domains and actions.conf
-2. For each certificate (RSA and EC), check whether renewal is due
+2. For each certificate (RSA and EC), check the CA's renewal window (ARI)
+   when due for a check, and decide whether renewal is due (see the
+   `configuration` topic)
 3. If any key type is due, start the certificate's `prepare` actions
 4. Generate keys/CSRs if missing and complete ACME http-01 challenges
 5. Save the issued certificates and stop the `prepare` actions
@@ -256,9 +258,6 @@ challengeDropDir: /srv/web/challenges/
 # ACME account key (RSA, or EC P-256/P-384): openssl genrsa 4096 > account.key
 accountKey: /etc/ssl/private/lets-encrypt-account.key.pem
 
-# Renew when a certificate has fewer than this many days left
-reauthorizeDays: 30
-
 # Key settings for the RSA and EC certificate of every domain
 keyBitsRSA: 2048
 curve: prime256v1
@@ -267,14 +266,27 @@ curve: prime256v1
 alwaysGenerateNewKeys: no
 ```
 
+## Renewal Timing
+
+By default lematt follows the CA: it renews inside the window Let's
+Encrypt suggests for each certificate (ARI), or, without one, when 1/3
+of the certificate's lifetime remains (half, below 10 days). After a
+failure it backs off (1 minute, 10 minutes, 100 minutes, then daily, or
+longer if the CA asks); `--force-renew` retries immediately. `--status`
+shows when each certificate will renew and why.
+
+`reauthorizeDays` and `generateNewCertsAfterDays` can only make renewal
+earlier. `reauthorizeDays` is ignored for certificates whose whole
+lifetime is shorter, because it would renew them on every run.
+
 ## Keys
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `challengeDropDir` | (required) | Webroot directory for http-01 tokens |
 | `accountKey` | (required) | ACME account private key |
-| `reauthorizeDays` | 15 | Renew with fewer than N days remaining |
-| `generateNewCertsAfterDays` | 0 (off) | Renew N days after issuance instead |
+| `reauthorizeDays` | (unset) | Renew no later than N days before expiry |
+| `generateNewCertsAfterDays` | 0 (off) | Renew once a certificate is N days old |
 | `keyBitsRSA` | 2048 | RSA key size |
 | `curve` | prime256v1 | EC curve (prime256v1 or secp384r1) |
 | `alwaysGenerateNewKeys` | no | Rotate keys on every renewal |
@@ -284,7 +296,6 @@ alwaysGenerateNewKeys: no
             "[config]",
             "challengeDropDir: /srv/web/challenges/",
             "accountKey: /etc/ssl/private/lets-encrypt-account.key.pem",
-            "reauthorizeDays: 30",
         ],
         see_also=["domains", "actions", "config"],
         keywords=["config", "settings", "format", "ini", "lematt.conf"],

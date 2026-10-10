@@ -17,7 +17,12 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from lematt.acme import AcmeError, issue_certificate
+from lematt.acme import (
+    AcmeError,
+    AlreadyReplacedError,
+    fetch_renewal_info,
+    issue_certificate,
+)
 from lematt.config import (
     ActionConfig,
     CertificateInfo,
@@ -36,7 +41,14 @@ from lematt.crypto import (
 from lematt.log import EVENT
 from lematt.renewal import RenewalDecision, backoff_until, decide
 from lematt.session import AcmeSession
-from lematt.state import AttemptState, CertState, IssuedState, StateStore, utcnow
+from lematt.state import (
+    AttemptState,
+    CertState,
+    IssuedState,
+    RenewalInfoState,
+    StateStore,
+    utcnow,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -62,6 +74,9 @@ class RequestFailure:
 
 # Upper bound on waiting before retrying a transient ACME failure
 MAX_RETRY_WAIT = 60.0
+
+# Wait before re-checking ARI after a failed check (RFC 9773 asks for backoff)
+ARI_RETRY_AFTER_ERROR = datetime.timedelta(hours=1)
 
 
 @dataclass
@@ -310,11 +325,19 @@ class CertificateManager:
         domain_config: DomainConfig,
         key_type: KeyType,
         now: datetime.datetime | None = None,
+        *,
+        session: AcmeSession | None = None,
     ) -> RenewalPlan:
-        """Load a certificate and its state and decide whether to renew it."""
+        """Load a certificate and its state and decide whether to renew it.
+
+        With a ``session``, the CA's renewal window (ARI) is refreshed first
+        when it is due for a check.
+        """
         now = now or utcnow()
         info = get_certificate_info(self.config.get_cert_path(domain_config, key_type))
         state = self.load_state(domain_config, key_type, info)
+        if session is not None:
+            self.refresh_renewal_info(info, state, session, now)
         decision = decide(
             info,
             state,
@@ -323,6 +346,79 @@ class CertificateManager:
             force=self.config.force_renew,
         )
         return RenewalPlan(key_type, info, state, decision)
+
+    def refresh_renewal_info(
+        self,
+        info: CertificateInfo,
+        state: CertState,
+        session: AcmeSession,
+        now: datetime.datetime,
+    ) -> None:
+        """Update ``state`` with the CA's current renewal window, if it's time.
+
+        The window is fetched again only after the CA's Retry-After. When it
+        changes, a new random renewal time is picked inside it and the change
+        is recorded; an explanation URL (e.g. an incident requiring early
+        renewal) is logged as an event. Failures keep the previous data.
+        """
+        if self.config.is_dry_run or not info.ari_id or not info.serial_hex:
+            return
+        current = state.renewal_info
+        if current and current.serial == info.serial_hex and now < current.next_check:
+            return
+
+        try:
+            fetched = fetch_renewal_info(session.transport, info.ari_id)
+        except AcmeError as e:
+            if e.problem != "unsupported":
+                self.log(
+                    f"Could not check renewal info for {state.cert_id}: {e}", "WARN"
+                )
+                if current and current.serial == info.serial_hex:
+                    current.next_check = now + ARI_RETRY_AFTER_ERROR
+            return
+        except (OSError, ValueError) as e:
+            self.log(f"Could not check renewal info for {state.cert_id}: {e}", "WARN")
+            return
+
+        changed = (
+            current is None
+            or current.serial != info.serial_hex
+            or (current.window_start, current.window_end)
+            != (fetched.window_start, fetched.window_end)
+        )
+        selected = (
+            fetched.select_time()
+            if changed or current is None
+            else current.selected_time
+        )
+        state.renewal_info = RenewalInfoState(
+            serial=info.serial_hex,
+            window_start=fetched.window_start,
+            window_end=fetched.window_end,
+            selected_time=selected,
+            fetched_at=now,
+            next_check=now + datetime.timedelta(seconds=fetched.check_after),
+            explanation_url=fetched.explanation_url,
+        )
+        if not changed:
+            return
+        self.store.record(
+            "renewal_window",
+            state.cert_id,
+            serial=info.serial_hex,
+            window_start=fetched.window_start,
+            window_end=fetched.window_end,
+            selected_time=selected,
+            explanation_url=fetched.explanation_url,
+        )
+        if fetched.explanation_url:
+            self.log(
+                f"CA set renewal window for {state.cert_id} to "
+                f"{fetched.window_start}..{fetched.window_end} UTC: "
+                f"{fetched.explanation_url}",
+                update=True,
+            )
 
     def new_session(self) -> AcmeSession:
         """An ACME session for this mode's directory and account."""
@@ -341,6 +437,7 @@ class CertificateManager:
         domain_context: str = "",
         *,
         session: AcmeSession | None = None,
+        replaces: str | None = None,
     ) -> RequestFailure | None:
         """Request a signed certificate from the ACME server.
 
@@ -356,6 +453,8 @@ class CertificateManager:
             max_retries: Maximum attempts for transient failures.
             domain_context: Domain context for logging (e.g., "example.com[rsa]").
             session: ACME session to reuse (a new one by default).
+            replaces: ARI ID of the certificate being renewed. Let's Encrypt
+                exempts such renewals from rate limits.
 
         Returns:
             None on success, otherwise what went wrong.
@@ -374,10 +473,15 @@ class CertificateManager:
                     context=domain_context,
                     transport=session.transport,
                     solver=session.solver(),
+                    replaces=replaces,
                 )
                 write_file_atomically(output_path, issued.pem.encode())
                 return None
             except AcmeError as e:
+                if isinstance(e, AlreadyReplacedError) and replaces:
+                    self.log(f"{e}; ordering without replaces", "RETRY")
+                    replaces = None
+                    continue
                 if e.problem == "accountDoesNotExist" and not account_replaced:
                     session.forget_account()
                     account_replaced = True
@@ -546,7 +650,11 @@ class CertificateManager:
             One CertificateResult per key type.
         """
         now = utcnow()
-        plans = [self.plan(domain_config, kt, now) for kt in key_types or list(KeyType)]
+        session = self.new_session()
+        plans = [
+            self.plan(domain_config, kt, now, session=session)
+            for kt in key_types or list(KeyType)
+        ]
         for plan in plans:
             for note in plan.decision.notes:
                 self.log(note, "WARN")
@@ -558,7 +666,6 @@ class CertificateManager:
                 self.process_domain(domain_config, p.key_type, plan=p) for p in plans
             ]
 
-        session = self.new_session()
         prepare_runner = PrepareActionRunner(self.config)
         prepared_processes: list[subprocess.Popen] = []
         try:
@@ -658,6 +765,7 @@ class CertificateManager:
             cert,
             domain_context=f"{domain_config.primary_domain}[{key_type}]",
             session=session,
+            replaces=plan.state.issued.ari_id if plan.state.issued else None,
         )
         if failure is not None:
             self.record_failure(plan, failure)
