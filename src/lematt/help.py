@@ -617,7 +617,9 @@ record for its own account and `dns-01`.
 - **dns-persist-01** (announced, not live as of 2026-10): one standing
   `_validation-persist.<name>` TXT record naming lematt's ACME account
 
-See docs/challenges.md for the design notes and when to implement each.
+See docs/challenges.md for the design notes and when to implement each,
+and docs/private-ca.md for using an internal ACME CA (step-ca) or a local
+Boulder instance.
 """,
         examples=[
             "example.com www api mail",

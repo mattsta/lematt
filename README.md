@@ -653,6 +653,17 @@ client for wildcard names. [docs/challenges.md](docs/challenges.md) covers
 the options, the CAA interplay, and how dns-01 and the upcoming
 dns-persist-01 would be added to lematt.
 
+## Private and Custom ACME CAs
+
+lematt currently talks only to Let's Encrypt. Using an internal CA for
+private systems needs three additions: configurable directory URLs, a
+trusted root bundle for the CA's endpoint, and External Account Binding.
+[docs/private-ca.md](docs/private-ca.md) describes those changes, a
+step-ca setup for internal names (including its 24-hour default
+lifetime), and running Let's Encrypt's Boulder locally as an integration
+test target. It also explains why lematt's test CA isn't a basis for a
+production CA.
+
 ---
 
 ## Automated Renewals with systemd
