@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff format --check src tests
+      - run: uv run ruff check src tests
+      - run: uv run mypy src
+      - run: uv run pytest
