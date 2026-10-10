@@ -290,6 +290,21 @@ class ConfigLoader:
         """The TOML ``[notifications]`` table, if any."""
         return dict(self._config_data.get("notifications", {}))
 
+    def notification_settings(self) -> dict[str, Any] | None:
+        """Notification settings, or None if notifications aren't configured.
+
+        They live in a TOML ``[notifications]`` table: the configuration file
+        itself when it is TOML, otherwise a ``lematt.toml`` next to it.
+        """
+        if "notifications" in self._config_data:
+            return self.notifications
+        companion = self.config_base / "lematt.toml"
+        if self._format != "ini" or not companion.is_file():
+            return None
+        loader = ConfigLoader(self.config_base, config_file=companion)
+        loader.load()
+        return loader.notifications if "notifications" in loader._config_data else None
+
     def load(self) -> None:
         """Read the configuration file.
 

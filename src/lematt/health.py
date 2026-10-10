@@ -488,11 +488,18 @@ class HealthChecker:
                 self.notification_manager.notify(event)
 
             elif cert.status == HealthStatus.WARNING:
-                if cert.days_until_expiry is not None:
-                    self.notification_manager.notify_expiry_warning(
-                        cert.domain,
-                        cert.days_until_expiry,
+                self.notification_manager.notify(
+                    NotificationEvent(
+                        event_type="warning",
+                        title="Certificate Needs Attention",
+                        message=f"{cert.domain} ({cert.key_type}): {cert.message}",
+                        details={
+                            "domain": cert.domain,
+                            "key_type": cert.key_type,
+                            "days_remaining": cert.days_until_expiry,
+                        },
                     )
+                )
 
 
 @dataclass

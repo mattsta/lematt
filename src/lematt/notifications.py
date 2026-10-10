@@ -562,6 +562,14 @@ class NotificationConfig:
     notify_on_warning: bool = True
     notify_on_failure: bool = True
 
+    @classmethod
+    def from_settings(cls, settings: dict[str, object]) -> NotificationConfig:
+        """Build from a TOML [notifications] table; unknown keys are warned about."""
+        known = set(cls.__dataclass_fields__)
+        for key in sorted(set(settings) - known):
+            logger.warning(f"[notifications]: ignoring unknown key '{key}'")
+        return cls(**{k: v for k, v in settings.items() if k in known})  # type: ignore[arg-type]
+
     def create_manager(self) -> NotificationManager:
         """Create a NotificationManager from this configuration."""
         manager = NotificationManager(
@@ -613,3 +621,55 @@ class NotificationConfig:
             manager.add_backend(JournaldBackend(identifier=self.journald_identifier))
 
         return manager
+
+
+def run_notifications(history: list[dict[str, object]]) -> list[NotificationEvent]:
+    """Summarize one renewal run's history events as notifications.
+
+    One event per kind: failed renewals (with the CA's error and the next
+    attempt), CA-requested early renewals (ARI explanation URLs), and
+    successful renewals (sent only if ``notify_on_success``).
+    """
+    by_kind: dict[str, list[dict[str, object]]] = {}
+    for entry in history:
+        by_kind.setdefault(str(entry.get("event")), []).append(entry)
+
+    events: list[NotificationEvent] = []
+    if failed := by_kind.get("renewal_failed"):
+        events.append(
+            NotificationEvent(
+                event_type="failure",
+                title="Certificate Renewal Failed",
+                message=f"{len(failed)} certificate renewal(s) failed",
+                details={
+                    str(e.get("cert")): f"{e.get('error')} "
+                    f"(next attempt after {e.get('next_attempt_after')})"
+                    for e in failed
+                },
+            )
+        )
+    early = [e for e in by_kind.get("renewal_window", []) if e.get("explanation_url")]
+    if early:
+        events.append(
+            NotificationEvent(
+                event_type="warning",
+                title="CA Requested Early Renewal",
+                message=f"The CA moved the renewal window for {len(early)} certificate(s)",
+                details={
+                    str(e.get("cert")): str(e.get("explanation_url")) for e in early
+                },
+            )
+        )
+    if issued := by_kind.get("issued"):
+        events.append(
+            NotificationEvent(
+                event_type="success",
+                title="Certificates Renewed",
+                message=f"Renewed {len(issued)} certificate(s)",
+                details={
+                    str(e.get("cert")): f"valid until {e.get('not_after')}"
+                    for e in issued
+                },
+            )
+        )
+    return events

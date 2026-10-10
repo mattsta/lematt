@@ -515,10 +515,18 @@ NOTIFY_CUSTOM_CMD="/usr/local/bin/my-notify.sh"
 
 ## Notification Backends
 
-`--test-notification` sends a test event through the backends configured
-in the `[notifications]` table of the TOML config (or of a `lematt.toml`
-next to an INI config): email, Slack/Discord/generic webhook, PagerDuty,
-ntfy, custom command, journald.
+Backends are configured in the `[notifications]` table of the TOML config
+(or of a `lematt.toml` next to an INI config): email, Slack/Discord/generic
+webhook, PagerDuty, ntfy, custom command, journald. Without the table,
+nothing is sent.
+
+After each renewal run lematt sends one notification per kind:
+- failure: renewals that failed, with the CA's error and next attempt
+- warning: the CA asked for early renewal (ARI explanation URL)
+- success: certificates renewed (only with `notify_on_success = true`)
+
+`--health-check` notifies critical and overdue certificates the same way.
+`--test-notification` sends a test event to every configured backend.
 """,
         examples=[
             "lematt --test --init-notifications",

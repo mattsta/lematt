@@ -7,6 +7,7 @@ dispatches to the selected command, defaulting to a renewal run.
 
 import argparse
 import contextlib
+import datetime
 import json
 import os
 import sys
@@ -28,7 +29,12 @@ from lematt.config_loader import ConfigError, ConfigLoader
 from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import EVENT, setup_logging
 from lematt.manager import CertificateManager
-from lematt.state import RunLockedError, StateStore
+from lematt.notifications import (
+    NotificationConfig,
+    NotificationManager,
+    run_notifications,
+)
+from lematt.state import RunLockedError, StateStore, utcnow
 
 # Exit code when another renewal run holds the lock (EX_TEMPFAIL)
 EXIT_RUN_LOCKED = 75
@@ -525,6 +531,7 @@ def cmd_health(ctx: Context) -> int:
         config=ctx.config,
         warning_days=args.warning_days,
         critical_days=args.critical_days,
+        notification_manager=notification_manager(ctx),
     )
     health = checker.check_all_certificates(ctx.domains)
 
@@ -629,39 +636,24 @@ def cmd_report(ctx: Context) -> int:
     return 0
 
 
+def notification_manager(ctx: Context) -> NotificationManager | None:
+    """Backends from the TOML [notifications] table, or None if not configured."""
+    try:
+        settings = ctx.loader.notification_settings()
+    except ConfigError as e:
+        logger.error(f"Config error: {e}")
+        return None
+    if settings is None:
+        return None
+    return NotificationConfig.from_settings(settings).create_manager()
+
+
 def cmd_test_notification(ctx: Context) -> int:
     """--test-notification: send a test event to each configured backend."""
-    from lematt.notifications import NotificationConfig, NotificationEvent
+    from lematt.notifications import NotificationEvent
 
-    # Settings live in the TOML [notifications] table: the --config file
-    # itself when it's TOML, else a lematt.toml beside it
-    settings = ctx.loader.notifications
-    toml_path = ctx.loader.config_base / "lematt.toml"
-    if not settings and ctx.loader.format == "ini" and toml_path.exists():
-        notify_loader = ConfigLoader(ctx.loader.config_base, config_file=toml_path)
-        try:
-            notify_loader.load()
-        except ConfigError as e:
-            logger.error(f"Config error: {e}")
-            return 1
-        settings = notify_loader.notifications
-
-    notify_config = NotificationConfig()
-    if settings:
-        notify_config = NotificationConfig(
-            email_to=settings.get("email_to"),
-            email_from=settings.get("email_from", "lematt@localhost"),
-            webhook_url=settings.get("webhook_url"),
-            webhook_format=settings.get("webhook_format", "slack"),
-            pagerduty_key=settings.get("pagerduty_key"),
-            ntfy_topic=settings.get("ntfy_topic"),
-            ntfy_server=settings.get("ntfy_server", "https://ntfy.sh"),
-            custom_command=settings.get("custom_command"),
-            journald_enabled=settings.get("journald_enabled", True),
-        )
-
-    manager = notify_config.create_manager()
-    if not manager.backends:
+    manager = notification_manager(ctx)
+    if not manager or not manager.backends:
         logger.error("No notification backends configured")
         logger.error("Configure notifications in lematt.toml [notifications] section")
         return 1
@@ -745,6 +737,21 @@ def cmd_renew(ctx: Context) -> int:
         return EXIT_RUN_LOCKED
 
 
+def send_run_notifications(ctx: Context, *, since: datetime.datetime) -> None:
+    """Notify configured backends about this run (failures, early renewals...)."""
+    manager = notification_manager(ctx)
+    if manager is None:
+        return
+    store = StateStore(Path(ctx.config.state_dir))
+    history = [
+        entry
+        for entry in store.history()
+        if datetime.datetime.fromisoformat(str(entry["at"]).removesuffix("Z")) >= since
+    ]
+    for event in run_notifications(history):
+        manager.notify(event)
+
+
 def run_renewal(ctx: Context, domains: list[DomainConfig]) -> int:
     """Process ``domains``, then deploy what was renewed; return the exit code."""
     args, config = ctx.args, ctx.config
@@ -758,6 +765,7 @@ def run_renewal(ctx: Context, domains: list[DomainConfig]) -> int:
         else create_progress_printer(args.verbose),
     )
 
+    started = utcnow().replace(microsecond=0)
     interrupted = False
     try:
         summary = executor.process_batch(domains=domains, domain_actions=ctx.actions)
@@ -777,6 +785,9 @@ def run_renewal(ctx: Context, domains: list[DomainConfig]) -> int:
             logger.error(f"Error running after-issue hooks: {e}")
             if not interrupted:
                 raise
+
+    if not config.is_dry_run:
+        send_run_notifications(ctx, since=started)
 
     if interrupted:
         logger.warning("Exiting due to interrupt - after-issue hooks completed")

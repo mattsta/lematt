@@ -306,3 +306,39 @@ def test_configured_profile_is_requested_and_recorded(monkeypatch, setup):
     assert state.issued.profile == "shortlived"
     lifetime = state.issued.not_after - state.issued.not_before
     assert lifetime < datetime.timedelta(days=7)
+
+
+def test_failures_and_renewals_are_notified(monkeypatch, setup):
+    base, server, _ = setup
+    sent = base / "notifications.log"
+    script = base / "notify.sh"
+    script.write_text(f'#!/bin/sh\necho "$1|$2|$3" >> {sent}\n')
+    script.chmod(0o755)
+    (base / "lematt.toml").write_text(
+        f'[notifications]\ncustom_command = "{script}"\n'
+        "journald_enabled = false\nnotify_on_success = true\n"
+    )
+
+    server.reject_validation = True
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 1
+    assert sent.read_text().splitlines() == [
+        "failure|Certificate Renewal Failed|2 certificate renewal(s) failed"
+    ]
+
+    server.reject_validation = False
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+    assert sent.read_text().splitlines()[-1] == (
+        "success|Certificates Renewed|Renewed 2 certificate(s)"
+    )
+
+
+def test_nothing_is_notified_without_configuration(monkeypatch, setup):
+    base, server, _ = setup
+    server.reject_validation = True
+    sent = []
+    monkeypatch.setattr(
+        "lematt.notifications.NotificationManager.notify", lambda s, e: sent.append(e)
+    )
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 1
+    assert sent == []

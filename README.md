@@ -1210,7 +1210,10 @@ console.print(tree)
 
 ## Alerting and Notifications
 
-lematt supports multiple notification backends for alerting on certificate issues.
+lematt sends alerts from renewal runs and health checks through the backends
+configured in a TOML `[notifications]` table: in the `--config` file when it
+is TOML, or in a `lematt.toml` next to an INI `lematt.conf`. Without that
+table, lematt sends no notifications.
 
 ### Configure Notifications
 
@@ -1288,9 +1291,9 @@ NOTIFY_CUSTOM_CMD="/usr/local/bin/my-script.sh"
 
 | Event Type | Trigger                            | Default  |
 | ---------- | ---------------------------------- | -------- |
-| `failure`  | Certificate renewal failed         | Notify ✓ |
-| `warning`  | Certificate expiring soon          | Notify ✓ |
-| `success`  | Renewal completed successfully     | Silent   |
+| `failure`  | Renewals failed in a run (with the CA's error and next attempt); certificate critical in a health check | Notify ✓ |
+| `warning`  | CA requested early renewal (ARI explanation); renewal overdue in a health check | Notify ✓ |
+| `success`  | Certificates renewed in a run      | Silent   |
 | `info`     | Informational (test notifications) | Silent   |
 
 ### Slack Notification Example
