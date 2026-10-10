@@ -80,6 +80,10 @@ class AlreadyReplacedError(AcmeError):
     """The order's ``replaces`` certificate was already replaced (RFC 9773)."""
 
 
+class AlreadyRevokedError(AcmeError):
+    """The certificate was already revoked."""
+
+
 class ServerError(AcmeError):
     """Temporary server-side failure (5xx / serverInternal)."""
 
@@ -98,6 +102,7 @@ _BY_PROBLEM: dict[str, type[AcmeError]] = {
     "badNonce": BadNonceError,
     "rateLimited": RateLimitedError,
     "alreadyReplaced": AlreadyReplacedError,
+    "alreadyRevoked": AlreadyRevokedError,
     "serverInternal": ServerError,
 }
 

@@ -2,7 +2,7 @@
 
 Precedence:
 
-1. No usable certificate (missing, unreadable): renew now.
+1. No usable certificate (missing, unreadable, or revoked): renew now.
 2. ``--force-renew``: renew now.
 3. The due time is the earliest of:
    - the CA's ARI window (RFC 9773), at the random moment lematt picked
@@ -48,7 +48,7 @@ class RenewalDecision:
     """Whether to renew now, when it's due, and why.
 
     Attributes:
-        basis: What set the due time: "missing", "unreadable", "forced",
+        basis: What set the due time: "missing", "unreadable", "revoked", "forced",
             "ari", "lifetime", "reauthorizeDays" or
             "generateNewCertsAfterDays".
         blocked_until: Set when renewal is due but backing off after
@@ -120,6 +120,15 @@ def decide(
     if info.parse_error or info.not_after is None or info.not_before is None:
         return _unless_backing_off(
             state, now, "unreadable", f"certificate unreadable: {info.parse_error}"
+        )
+
+    issued = state.issued if state else None
+    if issued and issued.revoked_at and issued.serial == info.serial_hex:
+        return _unless_backing_off(
+            state,
+            now,
+            "revoked",
+            f"certificate revoked {_when(issued.revoked_at)} ({issued.revocation_reason})",
         )
 
     due, basis = recommended_due(info, state)

@@ -474,3 +474,115 @@ def test_one_key_types_crash_keeps_the_others_certificate(monkeypatch, setup):
     ec = store.load_cert("mail.example.org.prime256v1")
     assert ec.attempts.consecutive_failures == 1
     assert "reload mail.example.org" in log.read_text()  # RSA was still deployed
+
+
+# -- revocation ---------------------------------------------------------------
+
+
+def _serial(base, cert_id: str) -> int:
+    return int(StateStore(base / "test" / "state").load_cert(cert_id).issued.serial, 16)
+
+
+def test_revoke_records_and_renewal_replaces(monkeypatch, setup, capsys):
+    base, server, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    rsa = _serial(base, "mail.example.org.rsa2048")
+    ec = _serial(base, "mail.example.org.prime256v1")
+
+    assert (
+        run(
+            monkeypatch,
+            base,
+            "--revoke",
+            "--domain",
+            "mail.example.org",
+            "--reason",
+            "superseded",
+            "--yes",
+        )
+        == 0
+    )
+
+    assert server.revoked == {rsa: 4, ec: 4}
+    store = StateStore(base / "test" / "state")
+    assert (
+        store.load_cert("mail.example.org.rsa2048").issued.revocation_reason
+        == "superseded"
+    )
+    assert [e["event"] for e in store.history()].count("revoked") == 2
+    capsys.readouterr()
+    assert (
+        run(monkeypatch, base, "--status", "--json", "--domain", "mail.example.org")
+        == 0
+    )
+    certs = json.loads(capsys.readouterr().out)["certificates"]
+    assert {c["status"] for c in certs} == {"revoked"}
+    assert all(c["renewal"]["renew_now"] for c in certs)
+
+    # The next regular run replaces the revoked certificates
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    assert _serial(base, "mail.example.org.rsa2048") != rsa
+    assert (
+        run(monkeypatch, base, "--revoke", "--domain", "mail.example.org", "--yes") == 0
+    )
+
+
+def test_key_compromise_signed_by_certificate_key_with_replacement(monkeypatch, setup):
+    base, server, log = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    key = base / "test" / "key" / "mail.example.org-key.rsa2048.test.pem"
+    old_key, old_serial = key.read_bytes(), _serial(base, "mail.example.org.rsa2048")
+    log.unlink()
+
+    assert (
+        run(
+            monkeypatch,
+            base,
+            "--revoke",
+            "--domain",
+            "mail.example.org",
+            "--key-type",
+            "rsa",
+            "--reason",
+            "keyCompromise",
+            "--sign-with-certificate-key",
+            "--replace",
+            "--yes",
+        )
+        == 0
+    )
+
+    assert server.revoked == {old_serial: 1}  # only RSA, signed by its own key
+    assert key.read_bytes() != old_key  # compromised key replaced
+    assert _serial(base, "mail.example.org.rsa2048") != old_serial
+    assert _key_matches_cert(base, "mail.example.org", "rsa2048")
+    assert "reload mail.example.org" in log.read_text()  # replacement deployed
+
+
+def test_revoke_requires_confirmation_and_a_domain(monkeypatch, setup):
+    base, server, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+
+    assert run(monkeypatch, base, "--revoke", "--yes") == 1  # no --domain
+    assert (
+        run(monkeypatch, base, "--revoke", "--domain", "mail.example.org") == 1
+    )  # no tty
+    assert (
+        run(monkeypatch, base, "--revoke", "--domain", "mail.example.org", "--dry-run")
+        == 0
+    )
+    assert (
+        run(
+            monkeypatch,
+            base,
+            "--revoke",
+            "--domain",
+            "mail.example.org",
+            "--reason",
+            "cessationOfOperation",
+            "--replace",
+            "--yes",
+        )
+        == 1
+    )
+    assert server.revoked == {}

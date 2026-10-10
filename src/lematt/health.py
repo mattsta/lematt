@@ -174,7 +174,12 @@ class HealthChecker:
 
         now = _utcnow()
         days_until_expiry = (info.not_after - now).days
-        if self._explicit_thresholds or plan is None or info.lifetime is None:
+        if plan is not None and plan.decision.basis == "revoked":
+            status, message = (
+                HealthStatus.CRITICAL,
+                f"Certificate {plan.decision.reason}",
+            )
+        elif self._explicit_thresholds or plan is None or info.lifetime is None:
             status, message = self._classify(days_until_expiry, "Certificate")
         else:
             status, message = self._classify_by_lifetime(

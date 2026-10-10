@@ -101,6 +101,47 @@ under `test/`). Always validate changes with `--test` first.
         see_also=["status", "domains", "actions"],
         keywords=["renew", "certificate", "acme", "lets encrypt", "cron"],
     ),
+    "revoke": HelpTopic(
+        name="revoke",
+        title="Revoking Certificates",
+        category=HelpCategory.COMMANDS,
+        summary="Revoke a certificate line's certificates (and replace them)",
+        content="""
+# Revoking Certificates
+
+`--revoke --domain NAME` revokes the certificates of the configured line
+containing NAME (RSA and EC; `--key-type rsa|ec` for one). lematt lists
+what it will revoke and asks you to type `revoke` (`--yes` skips this and
+is required when not on a terminal; `--dry-run` only shows the list).
+
+## Options
+
+- `--reason`: `unspecified` (default), `keyCompromise` (the private key
+  may be exposed; required by the Subscriber Agreement in that case),
+  `superseded` (replaced by a new certificate), `cessationOfOperation`
+  (you no longer control the names or the site is gone)
+- `--sign-with-certificate-key`: Sign with the certificate's own private
+  key instead of lematt's ACME account (works if the account key is lost;
+  Let's Encrypt may record the reason as keyCompromise)
+- `--replace`: Then issue replacements right away and run the deployment
+  actions. With `keyCompromise`, the replacements get new private keys.
+
+## Afterwards
+
+A revoked certificate is due for renewal immediately: `--status` shows it
+as `revoked`, health checks report it as critical, and the next run
+replaces it (if `--replace` didn't already). Revocations are recorded in
+the state history and sent to configured notifications.
+""",
+        examples=[
+            "lematt --prod --revoke --domain example.com --dry-run",
+            "lematt --prod --revoke --domain example.com --reason superseded --replace",
+            "lematt --prod --revoke --domain example.com --reason keyCompromise --replace --yes",
+            "lematt --prod --revoke --domain old.example.com --reason cessationOfOperation",
+        ],
+        see_also=["run", "status", "health"],
+        keywords=["revoke", "revocation", "compromise", "replace", "key"],
+    ),
     "status": HelpTopic(
         name="status",
         title="Check Certificate Status",

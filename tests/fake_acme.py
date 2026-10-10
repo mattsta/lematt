@@ -120,6 +120,8 @@ class FakeAcmeServer:
         self._certs: dict[str, str] = {}
         self._by_ari_id: dict[str, x509.Certificate] = {}
         self.replaced: set[str] = set()
+        self._issuer: dict[int, str | None] = {}  # serial -> ordering account
+        self.revoked: dict[int, int] = {}  # serial -> reason code
         self.ca_key = ec.generate_private_key(ec.SECP256R1())
         self.ca_name = x509.Name(
             [
@@ -223,6 +225,8 @@ class FakeAcmeServer:
             return self._challenge(kid, ident)
         if kind == "order":
             return self._order(ident)
+        if path == "/revoke":
+            return self._revoke(kid, jwk, payload)
         if kind == "finalize":
             return self._finalize(ident, payload)
         if kind == "cert":
@@ -252,7 +256,7 @@ class FakeAcmeServer:
             raise Problem(400, "badNonce", "injected bad nonce")
 
         if "jwk" in protected:
-            if request.url.path != "/new-account":
+            if request.url.path not in ("/new-account", "/revoke"):
                 raise Problem(400, "malformed", "jwk only allowed for newAccount")
             jwk, kid = protected["jwk"], None
         else:
@@ -318,6 +322,7 @@ class FakeAcmeServer:
             "names": names,
             "authz": authz_urls,
             "profile": payload.get("profile"),
+            "kid": kid,
             "polls": 0,
         }
         return self._reply(
@@ -452,6 +457,7 @@ class FakeAcmeServer:
         )
         self.issued.append(leaf)
         self._by_ari_id[ari_id(leaf)] = leaf
+        self._issuer[leaf.serial_number] = o["kid"]
         self._certs[order_id] = (
             leaf.public_bytes(Encoding.PEM) + ca.public_bytes(Encoding.PEM)
         ).decode()
@@ -494,6 +500,27 @@ class FakeAcmeServer:
             None,
         )
 
+    def _revoke(
+        self, kid: str | None, jwk: dict[str, str], payload: dict[str, Any]
+    ) -> httpx.Response:
+        cert = x509.load_der_x509_certificate(_b64decode(payload["certificate"]))
+        serial = cert.serial_number
+        if serial not in self._issuer:
+            raise Problem(404, "malformed", "unknown certificate")
+        if kid is None:
+            # Signed with a key in the JWK: must be the certificate's own key
+            if _thumbprint(jwk) != _thumbprint(_public_jwk(cert.public_key())):
+                raise Problem(403, "unauthorized", "key does not match certificate")
+        elif self._issuer[serial] != kid:
+            raise Problem(403, "unauthorized", "account did not order this certificate")
+        if serial in self.revoked:
+            raise Problem(400, "alreadyRevoked", "certificate already revoked")
+        reason = payload.get("reason", 0)
+        if reason not in (0, 1, 4, 5):
+            raise Problem(400, "badRevocationReason", f"reason {reason} not allowed")
+        self.revoked[serial] = reason
+        return self._reply(200)
+
 
 def ari_id(cert: x509.Certificate) -> str:
     """RFC 9773 certificate ID, computed independently of lematt."""
@@ -501,3 +528,21 @@ def ari_id(cert: x509.Certificate) -> str:
     serial = cert.serial_number
     der = serial.to_bytes(serial.bit_length() // 8 + 1, "big")
     return f"{_b64encode(aki.key_identifier)}.{_b64encode(der)}"
+
+
+def _public_jwk(key: Any) -> dict[str, str]:
+    if isinstance(key, rsa.RSAPublicKey):
+        n = key.public_numbers()
+        return {
+            "kty": "RSA",
+            "e": _b64encode(n.e.to_bytes((n.e.bit_length() + 7) // 8, "big")),
+            "n": _b64encode(n.n.to_bytes((n.n.bit_length() + 7) // 8, "big")),
+        }
+    size = (key.curve.key_size + 7) // 8
+    p = key.public_numbers()
+    return {
+        "kty": "EC",
+        "crv": {256: "P-256", 384: "P-384"}[key.curve.key_size],
+        "x": _b64encode(p.x.to_bytes(size, "big")),
+        "y": _b64encode(p.y.to_bytes(size, "big")),
+    }

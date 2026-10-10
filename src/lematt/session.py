@@ -67,3 +67,7 @@ class AcmeSession:
         logger.warning("The CA no longer recognizes the saved account; re-registering")
         self.transport.kid = None
         self.store.forget_account()
+
+    def transport_for(self, key: AccountKey) -> AcmeTransport:
+        """A transport signing with another key (e.g. a certificate's own key)."""
+        return make_transport(self.directory_url, key)

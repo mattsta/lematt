@@ -183,6 +183,35 @@ Deleting the state directory is safe: lematt rebuilds it from the
 certificates on disk (at the cost of re-checking ARI and forgetting
 failure history).
 
+## Revoking Certificates
+
+```bash
+# See what would be revoked
+lematt --prod --revoke --domain example.com --dry-run
+
+# Replaced by a new certificate: revoke, re-issue and deploy right away
+lematt --prod --revoke --domain example.com --reason superseded --replace
+
+# Private key exposed: revoke, re-issue with NEW keys, deploy (no prompt)
+lematt --prod --revoke --domain example.com --reason keyCompromise --replace --yes
+
+# Site retired / names no longer yours
+lematt --prod --revoke --domain old.example.com --reason cessationOfOperation
+```
+
+- `--domain` selects the configured line (both key types; `--key-type rsa|ec`
+  for one). lematt lists the certificates and asks you to type `revoke`
+  unless `--yes` is given; without a terminal, `--yes` is required.
+- Reasons are the ones Let's Encrypt accepts: `unspecified` (default),
+  `keyCompromise`, `superseded`, `cessationOfOperation`.
+- Revocation is signed with lematt's ACME account, or with the certificate's
+  own key via `--sign-with-certificate-key` (useful if the account key is
+  lost).
+- Revoked certificates show as `revoked` in `--status`, are critical in
+  health checks, and are renewed by the next run if `--replace` wasn't used.
+  Revocations are recorded in `history.jsonl` and notified.
+
+
 ## Configuration
 
 lematt supports two configuration formats:
@@ -613,6 +642,14 @@ Systemd Automation:
   --uninstall-systemd Remove systemd timer and service
   --systemd-status    Show status of systemd timer
   --systemd-preset    Timer schedule: default, aggressive, conservative
+
+Revocation:
+  --revoke            Revoke the certificates of --domain (asks to confirm)
+  --reason REASON     unspecified, keyCompromise, superseded, cessationOfOperation
+  --key-type rsa|ec   Only one key type's certificate
+  --sign-with-certificate-key  Sign with the certificate's key, not the account
+  --replace           Re-issue (new keys for keyCompromise) and deploy
+  --yes               Skip confirmation
 
 Health Checks:
   --health-check      Run health check on all certificates

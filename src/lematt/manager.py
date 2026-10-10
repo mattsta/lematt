@@ -15,14 +15,18 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from cryptography import x509
 from loguru import logger
 
 from lematt.acme import (
+    AccountKey,
     AcmeError,
     AlreadyReplacedError,
+    AlreadyRevokedError,
     ChallengeError,
     fetch_renewal_info,
     issue_certificate,
+    revoke_certificate,
 )
 from lematt.config import (
     ActionConfig,
@@ -72,6 +76,24 @@ class RequestFailure:
 
     message: str
     retry_after: float | None = None
+
+
+@dataclass(frozen=True)
+class CapturedCertificate:
+    """A certificate and its private key as read from disk at one moment."""
+
+    domain_config: DomainConfig
+    key_type: KeyType
+    cert_pem: bytes
+    key_pem: bytes | None
+
+
+@dataclass(frozen=True)
+class RevocationOutcome:
+    cert_id: str
+    serial: str
+    ok: bool
+    message: str
 
 
 # Upper bound on waiting before retrying a transient ACME failure
@@ -850,10 +872,87 @@ class CertificateManager:
         self.record_success(plan, cert, profile=self.config.profile_for(domain_config))
         return result(success=True, renewed=True)
 
+    def capture(
+        self, domain_config: DomainConfig, key_type: KeyType
+    ) -> CapturedCertificate | None:
+        """The certificate (and its key) currently on disk, or None."""
+        try:
+            cert_pem = pathlib.Path(
+                self.config.get_cert_path(domain_config, key_type)
+            ).read_bytes()
+        except FileNotFoundError:
+            return None
+        try:
+            key_pem = pathlib.Path(
+                self.config.get_key_path(domain_config, key_type)
+            ).read_bytes()
+        except FileNotFoundError:
+            key_pem = None
+        return CapturedCertificate(domain_config, key_type, cert_pem, key_pem)
+
+    def revoke(
+        self,
+        captured: CapturedCertificate,
+        reason: str,
+        *,
+        sign_with_certificate_key: bool = False,
+        session: AcmeSession | None = None,
+    ) -> RevocationOutcome:
+        """Revoke a captured certificate and record it.
+
+        Signed with lematt's ACME account by default, or with the
+        certificate's own private key (works without the issuing account;
+        Let's Encrypt may then record the reason as keyCompromise).
+        If the certificate is still the current one, it becomes due for
+        renewal immediately, with any failure backoff cleared.
+        """
+        cert_id = self.config.cert_id(captured.domain_config, captured.key_type)
+        serial = f"{x509.load_pem_x509_certificate(captured.cert_pem).serial_number:x}"
+        if self.config.is_dry_run:
+            self.log(
+                f"[DRY-RUN] Would revoke {cert_id} (serial {serial}, {reason})",
+                update=True,
+            )
+            return RevocationOutcome(cert_id, serial, ok=True, message="dry run")
+
+        already = False
+        try:
+            if sign_with_certificate_key:
+                if captured.key_pem is None:
+                    raise ValueError("the certificate's private key is missing")
+                session = session or self.new_session()
+                transport = session.transport_for(
+                    AccountKey.from_pem(captured.key_pem, source=f"{cert_id} key"),
+                )
+            else:
+                session = session or self.new_session()
+                session.ensure_account()
+                transport = session.transport
+            revoke_certificate(transport, captured.cert_pem, reason)
+        except AlreadyRevokedError:
+            already = True
+        except (AcmeError, OSError, ValueError) as e:
+            self.log(f"Revoking {cert_id} failed: {e}", "ERROR", update=True)
+            self.store.record("revocation_failed", cert_id, serial=serial, error=str(e))
+            return RevocationOutcome(cert_id, serial, ok=False, message=str(e))
+
+        state = self.store.load_cert(cert_id)
+        if state and state.issued and state.issued.serial == serial:
+            state.issued.revoked_at = utcnow()
+            state.issued.revocation_reason = reason
+            state.attempts.next_attempt_after = None
+            self.store.save_cert(state)
+        self.store.record(
+            "revoked", cert_id, serial=serial, reason=reason, already=already
+        )
+        message = "was already revoked" if already else f"revoked ({reason})"
+        self.log(f"{cert_id} (serial {serial}) {message}", update=True)
+        return RevocationOutcome(cert_id, serial, ok=True, message=message)
+
     def get_status_data(self, domains: Sequence[DomainConfig]) -> list[dict]:
         """Certificate status, including the renewal decision, as plain data.
 
-        ``status`` is one of: ok, renew_soon (renewal is due or backing
+        ``status`` is one of: ok, revoked, renew_soon (renewal is due or backing
         off), critical (less than a tenth of the lifetime left), expired,
         missing, parse_error, unknown.
         """
@@ -890,6 +989,8 @@ class CertificateManager:
             return "parse_error"
         if info.not_after is None or info.lifetime is None:
             return "unknown"
+        if decision.basis == "revoked":
+            return "revoked"
         if info.not_after <= now:
             return "expired"
         if info.not_after - now < info.lifetime / 10:
@@ -977,6 +1078,7 @@ class CertificateManager:
             "expired": "❌ EXPIRED",
             "missing": "⚠️  MISSING",
             "parse_error": "⚠️  PARSE ERROR",
+            "revoked": "⛔ REVOKED",
             "unknown": "⚠️  UNKNOWN",
         }
 

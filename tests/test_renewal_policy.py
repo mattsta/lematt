@@ -6,7 +6,7 @@ import pytest
 
 from lematt.config import CertificateInfo
 from lematt.renewal import RenewalSettings, backoff_until, decide
-from lematt.state import AttemptState, CertState, RenewalInfoState
+from lematt.state import AttemptState, CertState, IssuedState, RenewalInfoState
 
 DAY = datetime.timedelta(days=1)
 ISSUED = datetime.datetime(2026, 10, 1)
@@ -163,3 +163,23 @@ def test_backoff_also_applies_before_the_first_certificate():
     assert not decide(missing, state, ISSUED).renew
     assert decide(missing, state, ISSUED + 2 * DAY).renew
     assert decide(missing, state, ISSUED, force=True).renew
+
+
+def test_revoked_certificates_are_due_immediately():
+    state = CertState(
+        cert_id="c",
+        issued=IssuedState(
+            serial="0a",
+            ari_id=None,
+            not_before=ISSUED,
+            not_after=ISSUED + 90 * DAY,
+            revoked_at=ISSUED + DAY,
+            revocation_reason="keyCompromise",
+        ),
+    )
+
+    decision = decide(cert(90), state, ISSUED + 2 * DAY)
+
+    assert (decision.renew, decision.basis) == (True, "revoked")
+    assert "keyCompromise" in decision.reason
+    assert decide(cert(90, serial="0b"), state, ISSUED + 2 * DAY).renew is False

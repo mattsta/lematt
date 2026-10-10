@@ -7,11 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-
-from lematt.crypto import load_private_key
 
 # Curve name -> (JWS alg, JWK crv, hash, coordinate size in bytes)
 _EC_ALGORITHMS: dict[str, tuple[str, str, hashes.HashAlgorithm, int]] = {
@@ -37,13 +35,19 @@ class AccountKey:
 
     @classmethod
     def from_file(cls, path: str | Path) -> AccountKey:
-        key = load_private_key(path)
-        if isinstance(key, ec.EllipticCurvePrivateKey) and key.curve.name not in (
-            _EC_ALGORITHMS
-        ):
-            raise ValueError(
-                f"{path}: account keys must be RSA, P-256 or P-384 (got {key.curve.name})"
-            )
+        return cls.from_pem(Path(path).read_bytes(), source=str(path))
+
+    @classmethod
+    def from_pem(cls, pem: bytes, *, source: str = "key") -> AccountKey:
+        """A signing key from PEM (an account key, or a certificate's key)."""
+        key = serialization.load_pem_private_key(pem, password=None)
+        if isinstance(key, ec.EllipticCurvePrivateKey):
+            if key.curve.name not in _EC_ALGORITHMS:
+                raise ValueError(
+                    f"{source}: keys must be RSA, P-256 or P-384 (got {key.curve.name})"
+                )
+        elif not isinstance(key, rsa.RSAPrivateKey):
+            raise ValueError(f"{source}: unsupported key type {type(key).__name__}")
         return cls(key)
 
     @property

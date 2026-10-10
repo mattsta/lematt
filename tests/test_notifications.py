@@ -53,3 +53,19 @@ def test_settings_honor_all_known_keys_and_warn_about_others(capsys):
     assert config.notify_on_success is True
     assert config.create_manager().notify_on_success is True
     assert "ignoring unknown key 'colour'" in capsys.readouterr().err
+
+
+def test_revocations_are_reported():
+    (event,) = run_notifications(
+        [
+            {
+                "event": "revoked",
+                "cert": "a.rsa2048",
+                "serial": "0a",
+                "reason": "keyCompromise",
+            }
+        ]
+    )
+
+    assert (event.event_type, event.title) == ("warning", "Certificates Revoked")
+    assert event.details == {"a.rsa2048": "serial 0a (keyCompromise)"}

@@ -7,6 +7,7 @@ dispatches to the selected command, defaulting to a renewal run.
 
 import argparse
 import contextlib
+import dataclasses
 import datetime
 import json
 import os
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from lematt.acme import REVOCATION_REASONS
 from lematt.actions import ActionRunner
 from lematt.config import (
     DomainActions,
@@ -26,6 +28,7 @@ from lematt.config import (
     RenewalSummary,
 )
 from lematt.config_loader import ConfigError, ConfigLoader
+from lematt.crypto import get_certificate_info
 from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import EVENT, setup_logging
 from lematt.manager import CertificateManager
@@ -262,6 +265,47 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["default", "aggressive", "conservative"],
         default="default",
         help="Systemd timer schedule preset (default: twice daily)",
+    )
+
+    # Revocation
+    revoke_group = parser.add_argument_group("revocation")
+    revoke_group.add_argument(
+        "--revoke",
+        dest="revoke",
+        action="store_true",
+        help="Revoke the certificates of --domain (asks for confirmation)",
+    )
+    revoke_group.add_argument(
+        "--reason",
+        dest="revoke_reason",
+        choices=list(REVOCATION_REASONS),
+        default="unspecified",
+        help="Revocation reason (default: unspecified)",
+    )
+    revoke_group.add_argument(
+        "--key-type",
+        dest="key_type",
+        choices=["rsa", "ec"],
+        default=None,
+        help="Only revoke this key type's certificate (default: both)",
+    )
+    revoke_group.add_argument(
+        "--sign-with-certificate-key",
+        dest="sign_with_certificate_key",
+        action="store_true",
+        help="Sign the revocation with the certificate's key instead of the account key",
+    )
+    revoke_group.add_argument(
+        "--replace",
+        dest="replace",
+        action="store_true",
+        help="After revoking, issue replacements (new keys for keyCompromise) and deploy them",
+    )
+    revoke_group.add_argument(
+        "--yes",
+        dest="assume_yes",
+        action="store_true",
+        help="Don't ask for confirmation (required when not on a terminal)",
     )
 
     # Health check and monitoring
@@ -730,6 +774,103 @@ def selected_domains(ctx: Context) -> list[DomainConfig] | None:
     return selected
 
 
+def cmd_revoke(ctx: Context) -> int:
+    """--revoke: revoke a configured certificate line's certificates.
+
+    Shows what will be revoked and asks for confirmation (``--yes`` skips
+    it). Revocation is recorded in state, which makes the certificates due
+    for renewal; ``--replace`` renews them right away (with new keys for
+    keyCompromise) and runs the deployment actions.
+    """
+    args, config = ctx.args, ctx.config
+    if not args.single_domain:
+        logger.error("--revoke needs --domain NAME (a name on the certificate)")
+        return 1
+    if args.replace and args.revoke_reason == "cessationOfOperation":
+        logger.error("--replace contradicts --reason cessationOfOperation")
+        return 1
+    domains = selected_domains(ctx)
+    if domains is None:
+        return 1
+
+    manager = CertificateManager(config)
+    key_types = [KeyType.from_string(args.key_type)] if args.key_type else list(KeyType)
+    targets = []
+    for domain_config in domains:
+        for key_type in key_types:
+            captured = manager.capture(domain_config, key_type)
+            if captured is None:
+                logger.warning(
+                    f"No {key_type} certificate for {domain_config}; skipping"
+                )
+            else:
+                targets.append(captured)
+    if not targets:
+        logger.error("Nothing to revoke")
+        return 1
+
+    signer = "certificate key" if args.sign_with_certificate_key else "ACME account"
+    logger.info(
+        f"Revoking {len(targets)} certificate(s), reason {args.revoke_reason}, signed by {signer}:"
+    )
+    for captured in targets:
+        info = get_certificate_info(
+            config.get_cert_path(captured.domain_config, captured.key_type)
+        )
+        logger.info(
+            f"  {captured.domain_config} [{captured.key_type}] serial {info.serial_hex}, "
+            f"expires {info.not_after:%Y-%m-%d}, names {', '.join(info.san_domains)}"
+        )
+    if args.replace:
+        rotation = " with new keys" if args.revoke_reason == "keyCompromise" else ""
+        logger.info(f"Then issue replacements{rotation} and run deployment actions")
+
+    if not config.is_dry_run and not args.assume_yes:
+        if not sys.stdin.isatty():
+            logger.error("Refusing to revoke without confirmation; pass --yes")
+            return 1
+        if input("Type 'revoke' to continue: ").strip() != "revoke":
+            logger.warning("Aborted; nothing was revoked")
+            return 1
+
+    if config.is_dry_run:
+        for captured in targets:
+            manager.revoke(captured, args.revoke_reason)
+        return 0
+
+    store = StateStore(Path(config.state_dir))
+    try:
+        with store.run_lock():
+            started = utcnow().replace(microsecond=0)
+            session = manager.new_session()
+            outcomes = [
+                manager.revoke(
+                    captured,
+                    args.revoke_reason,
+                    sign_with_certificate_key=args.sign_with_certificate_key,
+                    session=session,
+                )
+                for captured in targets
+            ]
+            exit_code = 0 if all(o.ok for o in outcomes) else 1
+            if args.replace and any(o.ok for o in outcomes):
+                # Revoked certificates are now due; keyCompromise needs new keys
+                replace_config = dataclasses.replace(
+                    config,
+                    always_generate_new_keys=config.always_generate_new_keys
+                    or args.revoke_reason == "keyCompromise",
+                )
+                replace_ctx = dataclasses.replace(ctx, config=replace_config)
+                exit_code = max(
+                    exit_code, run_renewal(replace_ctx, domains, notify=False)
+                )
+            send_run_notifications(ctx, since=started)
+            return exit_code
+    except RunLockedError as e:
+        logger.warning(f"Not starting: {e}")
+        return EXIT_RUN_LOCKED
+
+
 def cmd_status(ctx: Context) -> int:
     """--status: certificate expiry table (or JSON)."""
     domains = selected_domains(ctx)
@@ -793,7 +934,9 @@ def send_run_notifications(ctx: Context, *, since: datetime.datetime) -> None:
         manager.notify(event)
 
 
-def run_renewal(ctx: Context, domains: list[DomainConfig]) -> int:
+def run_renewal(
+    ctx: Context, domains: list[DomainConfig], *, notify: bool = True
+) -> int:
     """Process ``domains``, then deploy what was renewed; return the exit code."""
     args, config = ctx.args, ctx.config
     CertificateManager(config).ensure_directories()
@@ -827,7 +970,7 @@ def run_renewal(ctx: Context, domains: list[DomainConfig]) -> int:
             if not interrupted:
                 raise
 
-    if not config.is_dry_run:
+    if notify and not config.is_dry_run:
         send_run_notifications(ctx, since=started)
 
     if interrupted:
@@ -862,6 +1005,7 @@ CONFIGURED_COMMANDS: list[tuple[Predicate, Callable[[Context], int], bool]] = [
     (lambda a: a.dashboard, cmd_dashboard, True),
     (lambda a: a.report, cmd_report, True),
     (lambda a: a.test_notification, cmd_test_notification, False),
+    (lambda a: a.revoke, cmd_revoke, False),
     (lambda a: a.show_status, cmd_status, True),
     (lambda a: a.caa_records, cmd_caa_records, True),
 ]

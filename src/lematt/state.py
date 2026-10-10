@@ -59,6 +59,8 @@ class IssuedState:
     issued_at: datetime.datetime | None = None
     order_url: str | None = None
     profile: str | None = None
+    revoked_at: datetime.datetime | None = None
+    revocation_reason: str | None = None
 
 
 @dataclass
@@ -120,7 +122,7 @@ class CertState:
 
 
 _DATETIME_FIELDS = {
-    IssuedState: ("not_before", "not_after", "issued_at"),
+    IssuedState: ("not_before", "not_after", "issued_at", "revoked_at"),
     RenewalInfoState: (
         "window_start",
         "window_end",

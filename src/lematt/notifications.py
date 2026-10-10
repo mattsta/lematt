@@ -627,8 +627,8 @@ def run_notifications(history: list[dict[str, object]]) -> list[NotificationEven
     """Summarize one renewal run's history events as notifications.
 
     One event per kind: failed renewals (with the CA's error and the next
-    attempt), CA-requested early renewals (ARI explanation URLs), and
-    successful renewals (sent only if ``notify_on_success``).
+    attempt), revocations, CA-requested early renewals (ARI explanation URLs),
+    and successful renewals (sent only if ``notify_on_success``).
     """
     by_kind: dict[str, list[dict[str, object]]] = {}
     for entry in history:
@@ -657,6 +657,18 @@ def run_notifications(history: list[dict[str, object]]) -> list[NotificationEven
                 message=f"The CA moved the renewal window for {len(early)} certificate(s)",
                 details={
                     str(e.get("cert")): str(e.get("explanation_url")) for e in early
+                },
+            )
+        )
+    if revoked := by_kind.get("revoked"):
+        events.append(
+            NotificationEvent(
+                event_type="warning",
+                title="Certificates Revoked",
+                message=f"Revoked {len(revoked)} certificate(s)",
+                details={
+                    str(e.get("cert")): f"serial {e.get('serial')} ({e.get('reason')})"
+                    for e in revoked
                 },
             )
         )

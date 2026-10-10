@@ -56,6 +56,11 @@ lematt now keeps state between runs.
   and consecutive renewal failures.
 - `--config path.toml` works (TOML configuration was documented but ignored).
 - `--print-systemd-units`.
+- A revocation command: `--revoke --domain NAME` with `--reason`,
+  `--key-type`, `--sign-with-certificate-key`, `--replace` (re-issue with new
+  keys for keyCompromise and deploy), confirmation (`--yes`) and `--dry-run`.
+  Revoked certificates are renewed promptly, shown in `--status` and health
+  checks, recorded in history and notified.
 - EC P-256/P-384 ACME account keys.
 
 ### Changed

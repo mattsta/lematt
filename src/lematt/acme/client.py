@@ -279,3 +279,38 @@ def issue_certificate(
     issued = client.download_certificate(order)
     client.log("✅ Certificate issued")
     return issued
+
+
+# RFC 5280 CRLReason codes Let's Encrypt accepts for revocation
+REVOCATION_REASONS: dict[str, int] = {
+    "unspecified": 0,
+    "keyCompromise": 1,
+    "superseded": 4,
+    "cessationOfOperation": 5,
+}
+
+
+def revoke_certificate(transport: AcmeTransport, cert_pem: bytes, reason: str) -> None:
+    """Revoke a certificate (RFC 8555 section 7.6).
+
+    The request is signed with the transport's key: an account key (with
+    ``transport.kid`` set) or the certificate's own private key (``kid`` None,
+    so the key is sent as a JWK).
+
+    Raises:
+        ValueError: Unknown reason.
+        AlreadyRevokedError: The CA had already revoked it.
+        AcmeError: The CA refused (e.g. unauthorized).
+    """
+    if reason not in REVOCATION_REASONS:
+        raise ValueError(
+            f"unknown revocation reason {reason!r} (use one of {', '.join(REVOCATION_REASONS)})"
+        )
+    endpoint = transport.directory.revoke_cert
+    if not endpoint:
+        raise AcmeError("unsupported", "the CA does not offer revocation")
+    der = x509.load_pem_x509_certificate(cert_pem).public_bytes(Encoding.DER)
+    payload: dict[str, Any] = {"certificate": b64url(der)}
+    if reason != "unspecified":  # absent means unspecified (RFC 5280 5.3.1)
+        payload["reason"] = REVOCATION_REASONS[reason]
+    transport.post(endpoint, payload)
