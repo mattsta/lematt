@@ -1,6 +1,8 @@
 """http-01 challenge handling via a shared webroot directory."""
 
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +35,12 @@ class Http01Solver:
             timeout=10.0, follow_redirects=True, verify=False
         )
     )
+    # Prepare actions (e.g. a remote leforward.py over ssh) start
+    # asynchronously and may not be listening yet when the challenge is
+    # published, so connection failures are retried briefly. Wrong content is
+    # a real misconfiguration and fails immediately.
+    connect_retry_delays: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+    sleep: Callable[[float], None] = time.sleep
 
     def path(self, token: str) -> Path:
         if not _TOKEN.match(token):
@@ -54,18 +62,30 @@ class Http01Solver:
         if not self.self_check:
             return
         url = f"http://{domain}/.well-known/acme-challenge/{token}"
-        try:
-            response = self.client.get(url)
-        except httpx.HTTPError as e:
-            raise ChallengeError(
-                "connection", f"challenge not reachable at {url}: {e}"
-            ) from e
+        response = self._fetch(url)
         if response.status_code != 200 or response.text.strip() != key_authorization:
             raise ChallengeError(
                 "unauthorized",
                 f"challenge at {url} returned HTTP {response.status_code} with "
                 f"unexpected content (is challengeDropDir served there?)",
             )
+
+    def _fetch(self, url: str) -> httpx.Response:
+        """GET the challenge, retrying connection-level failures briefly."""
+        for delay in (*self.connect_retry_delays, None):
+            try:
+                return self.client.get(url)
+            except httpx.TransportError as e:
+                if delay is None:
+                    raise ChallengeError(
+                        "connection", f"challenge not reachable at {url}: {e}"
+                    ) from e
+                self.sleep(delay)
+            except httpx.HTTPError as e:
+                raise ChallengeError(
+                    "connection", f"challenge not reachable at {url}: {e}"
+                ) from e
+        raise AssertionError("unreachable")
 
     def cleanup(self, token: str) -> None:
         self.path(token).unlink(missing_ok=True)

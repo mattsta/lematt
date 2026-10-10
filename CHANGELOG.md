@@ -95,6 +95,11 @@ lematt now keeps state between runs.
 
 ### Fixed
 
+- The http-01 self-check raced asynchronous prepare actions: a remote
+  forwarder (e.g. `ssh host leforward.py`) that wasn't listening yet failed
+  the certificate with "Connection refused". Connection-level failures are
+  now retried for a few seconds (0.5/1/2/4 s); wrong content still fails at
+  once.
 - Example and help `prepare` commands used `ssh -t`, which allocates no
   pseudo-terminal when lematt runs without one (cron, systemd), so a remote
   challenge forwarder could keep running after the run. They now use `ssh -tt`,
