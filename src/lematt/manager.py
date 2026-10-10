@@ -330,9 +330,15 @@ class CertificateManager:
             logger.debug(full_message)
 
     def ensure_directories(self) -> None:
-        """Create the key, certificate and CSR directories for this mode."""
+        """Create the key, certificate and CSR directories for this mode.
+
+        A new key directory is private to lematt's user (0700); existing
+        directories keep their permissions.
+        """
         for kind in ("key", "cert", "csr"):
-            self.config.mode_dir(kind).mkdir(parents=True, exist_ok=True)
+            self.config.mode_dir(kind).mkdir(
+                mode=0o700 if kind == "key" else 0o777, parents=True, exist_ok=True
+            )
 
     @property
     def store(self) -> StateStore:

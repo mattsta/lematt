@@ -171,7 +171,8 @@ The tags come from `rsa_tag`/`curve_tag` (default `rsa<bits>` and the curve
 name). A multi-name line is named after all its names joined with `_`
 (`example.com_www.example.com-...`), and each name also gets a symlink to
 it (`www.example.com-cert-combined.rsa2048.pem`). Private keys are written
-with mode 0600. New files replace old ones atomically.
+with mode 0600 in a key directory created with mode 0700. New files
+replace old ones atomically.
 
 ### Source Layout
 
@@ -1087,8 +1088,9 @@ and the crypto helpers (`generate_private_key`, `create_csr`,
 
 ## Security Considerations
 
-1. **Private keys** are written with mode 0600; keep the config directory
-   readable only by the user running lematt.
+1. **Private keys** are written with mode 0600, in a key directory created
+   with mode 0700; keep the config directory readable only by the user
+   running lematt.
 2. **The account key** controls revocation and (with CAA `accounturi`)
    issuance for your names. Keep it out of version control.
 3. **Action commands** run with lematt's privileges; review them like

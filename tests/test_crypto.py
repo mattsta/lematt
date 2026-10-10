@@ -68,6 +68,14 @@ def test_keys_are_private_pkcs8_with_configured_parameters(manager, tmp_path):
     assert load_private_key(ec_key).curve.name == "secp384r1"
 
 
+def test_new_key_directory_is_private(manager):
+    manager.ensure_directories()
+
+    key_dir = manager.config.mode_dir("key")
+    assert stat.S_IMODE(key_dir.stat().st_mode) == 0o700
+    assert manager.config.mode_dir("cert").is_dir()
+
+
 def test_regenerating_a_key_replaces_the_whole_file(manager, tmp_path):
     key = tmp_path / "key.pem"
     key.write_text("x" * 10_000)  # longer than any new key
