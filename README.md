@@ -12,7 +12,7 @@ A high-performance, type-safe certificate management system for automated Let's 
 - **Modern Python**: Type-safe dataclasses, Python 3.14+, keys and CSRs via the `cryptography` library
 - **TOML Configuration**: Modern config format with native list support (INI still supported)
 - **Test Mode**: Isolated staging environment to validate configuration safely
-- **Systemd Integration**: One-command timer installation with security hardening
+- **Systemd Integration**: Print or install a twice-daily timer and service
 - **Health Checks**: Certificate expiry monitoring with Prometheus metrics export
 - **Multi-Channel Alerting**: Email, Slack, Discord, PagerDuty, ntfy, and custom notifications
 - **Interactive Dashboard**: Live-updating terminal dashboard with real-time certificate status
@@ -559,9 +559,6 @@ lematt --test --health-check --write-health /var/lib/lematt/health.json
 ### Notification Commands
 
 ```bash
-# Create notification config
-sudo lematt --prod --init-notifications
-
 # Test notifications
 lematt --test --test-notification
 ```
@@ -572,11 +569,12 @@ lematt --test --test-notification
 usage: lematt [-h] (--prod | --test) [--cron] [--parallel N] [--config PATH]
               [-v] [--dry-run] [--status] [--json] [--list-domains]
               [--validate-config] [--domain DOMAIN] [--force-renew]
-              [--init-toml] [--install-systemd] [--uninstall-systemd]
+              [--init-toml] [--print-systemd-units] [--install-systemd]
+              [--uninstall-systemd]
               [--systemd-status] [--systemd-preset PRESET]
               [--health-check] [--check-live] [--warning-days N]
               [--critical-days N] [--prometheus] [--write-health PATH]
-              [--init-notifications] [--test-notification]
+              [--test-notification]
               [--dashboard] [--dashboard-refresh SECONDS] [--dashboard-compact]
               [--report] [--report-output PATH] [--report-format FORMAT]
               [--help-topic [TOPIC]] [--help-search QUERY]
@@ -602,10 +600,11 @@ Information:
   --init-toml         Create example lematt.toml and exit
 
 Systemd Automation:
+  --print-systemd-units Print the systemd service and timer units
   --install-systemd   Install systemd timer and service
   --uninstall-systemd Remove systemd timer and service
   --systemd-status    Show status of systemd timer
-  --systemd-preset    Timer schedule: default, aggressive, conservative, weekly
+  --systemd-preset    Timer schedule: default, aggressive, conservative
 
 Health Checks:
   --health-check      Run health check on all certificates
@@ -616,7 +615,6 @@ Health Checks:
   --write-health PATH Write health status to file
 
 Notifications:
-  --init-notifications Create example notification config
   --test-notification  Send a test notification
 
 Interactive UI:
@@ -817,8 +815,7 @@ journalctl -u lematt-renew.service -f
 | -------------- | ------------------------- | ------- | --------------------------------------- |
 | `default`      | `*-*-* 00,12:00:00`       | 1 hour  | Twice daily (Let's Encrypt recommended) |
 | `aggressive`   | `*-*-* 00,06,12,18:00:00` | 30 min  | Four times daily                        |
-| `conservative` | `*-*-* 03:00:00`          | 2 hours | Once daily at 3 AM                      |
-| `weekly`       | `Mon *-*-* 03:00:00`      | 1 hour  | Weekly on Monday                        |
+| `conservative` | `*-*-* 03:00:00`          | 2 hours | Once daily (90-day certificates only)   |
 
 ```bash
 # Install with preset
@@ -828,41 +825,36 @@ sudo lematt --prod --install-systemd --systemd-preset aggressive
 sudo lematt --prod --uninstall-systemd
 ```
 
-### Systemd Unit Details
+### Generated Units
 
-The installer creates:
-
-| File                                       | Purpose                              |
-| ------------------------------------------ | ------------------------------------ |
-| `/etc/systemd/system/lematt-renew.service` | Service unit with security hardening |
-| `/etc/systemd/system/lematt-renew.timer`   | Timer unit with randomized delay     |
-| `/usr/local/bin/lematt-notify.sh`          | Notification helper script           |
-| `/etc/lematt/notify.conf`                  | Notification configuration           |
-
-### Generated Service Unit
+`--print-systemd-units` prints both units (useful when configuration
+management installs them); `--install-systemd` writes them to
+`/etc/systemd/system` and enables the timer.
 
 ```systemd
+# /etc/systemd/system/lematt-renew.service
 [Unit]
-Description=Lematt Certificate Renewal Service
+Description=Lematt Certificate Renewal
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/bin/env python3 -m lematt --config /etc/lematt/lematt.conf
-
-# Security hardening
+WorkingDirectory=/etc/lematt
+ExecStart=/opt/lematt/.venv/bin/python3 -m lematt --config /etc/lematt/lematt.conf --prod --cron
+TimeoutStartSec=3h
+SuccessExitStatus=75
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-NoNewPrivileges=true
-ReadWritePaths=/etc/lematt
-MemoryMax=512M
-CPUQuota=50%
-
-[Install]
-WantedBy=multi-user.target
+SyslogIdentifier=lematt-renew
 ```
+
+`ExecStart` uses the Python running the install, and the mode comes from
+`--prod`/`--test`. Exit code 75 (another run still in progress) isn't a
+failure. The service isn't sandboxed (no `ProtectSystem`/`ProtectHome`/
+`NoNewPrivileges`) because deployment actions need ssh keys, arbitrary upload
+paths and `sudo`; add a drop-in if your actions allow hardening. Failure
+alerts come from lematt's own `[notifications]`.
 
 ### Manual Trigger
 
@@ -1273,19 +1265,6 @@ lematt --test --test-notification
 | **Ntfy**      | `ntfy_topic`, `ntfy_server`               | Push notifications        |
 | **Command**   | `custom_command`                          | Run custom script         |
 | **Journald**  | `journald_enabled`                        | Systemd journal logging   |
-
-### Shell Script Notifications
-
-The systemd installer creates `/usr/local/bin/lematt-notify.sh` which supports multiple backends via environment variables in `/etc/lematt/notify.conf`:
-
-```bash
-# /etc/lematt/notify.conf
-NOTIFY_EMAIL="admin@example.com"
-NOTIFY_WEBHOOK="https://hooks.slack.com/services/XXX/YYY/ZZZ"
-PAGERDUTY_KEY="your-integration-key"
-NTFY_TOPIC="my-cert-alerts"
-NOTIFY_CUSTOM_CMD="/usr/local/bin/my-script.sh"
-```
 
 ### Notification Events
 

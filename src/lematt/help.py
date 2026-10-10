@@ -408,12 +408,20 @@ update: ["ssh mail-reload-postfix"]
 
 ## Commands
 
-- `--install-systemd`: Write and enable `lematt-renew.service` and
-  `lematt-renew.timer`, plus `/usr/local/bin/lematt-notify.sh`
-- `--uninstall-systemd`: Disable and remove them
+- `--print-systemd-units`: Print `lematt-renew.service` and
+  `lematt-renew.timer` (e.g. for configuration management to install)
+- `--install-systemd`: Write them to /etc/systemd/system and enable the
+  timer
+- `--uninstall-systemd`: Disable the timer and remove the units
 - `--systemd-status`: Show timer state (`--json` supported)
-- `--systemd-preset NAME`: Schedule for `--install-systemd`
-- `--dry-run`: Print what would be installed
+- `--systemd-preset NAME`: Schedule to use
+- `--dry-run`: Show what `--install-systemd` would do
+
+The service runs `<this python> -m lematt --config <path> --prod|--test
+--cron` (the mode comes from `--prod`/`--test`), treats exit code 75 (an
+overlapping run) as success, and times out after 3 hours. It is not
+sandboxed because deployment actions need ssh keys, arbitrary upload
+paths and sudo; add hardening with a drop-in if yours don't.
 
 ## Presets
 
@@ -421,15 +429,15 @@ update: ["ssh mail-reload-postfix"]
 |--------|----------|
 | `default` | Twice daily (00:00 and 12:00, up to 1h random delay) |
 | `aggressive` | Four times daily |
-| `conservative` | Daily at 03:00 |
-| `weekly` | Mondays at 03:00 |
+| `conservative` | Daily at 03:00 (90-day certificates only) |
 
-Schedule renewals at least twice a day so certificates are renewed
-promptly when Let's Encrypt shortens lifetimes or asks for early renewal.
+Let's Encrypt recommends checking at least twice a day, so renewals
+follow the CA's renewal windows and shorter certificate lifetimes.
 """,
         examples=[
-            "lematt --test --install-systemd --dry-run",
-            "lematt --test --install-systemd --systemd-preset aggressive",
+            "lematt --prod --print-systemd-units",
+            "lematt --prod --install-systemd --dry-run",
+            "lematt --prod --install-systemd --systemd-preset aggressive",
             "lematt --test --systemd-status",
             "systemctl list-timers lematt-renew.timer",
         ],
@@ -497,22 +505,6 @@ lematt --prod --status --json
         content="""
 # Notifications
 
-## Systemd Failure Alerts
-
-`--install-systemd` installs `/usr/local/bin/lematt-notify.sh`, which the
-service runs when a renewal run fails. Configure it in
-`/etc/lematt/notify.conf` (create an example with `--init-notifications`,
-written next to `--config`):
-
-```bash
-NOTIFY_EMAIL="admin@example.com"
-NOTIFY_WEBHOOK="https://hooks.slack.com/services/XXX"
-PAGERDUTY_KEY="your-integration-key"
-NTFY_TOPIC="cert-alerts"
-NTFY_SERVER="https://ntfy.sh"
-NOTIFY_CUSTOM_CMD="/usr/local/bin/my-notify.sh"
-```
-
 ## Notification Backends
 
 Backends are configured in the `[notifications]` table of the TOML config
@@ -529,9 +521,7 @@ After each renewal run lematt sends one notification per kind:
 `--test-notification` sends a test event to every configured backend.
 """,
         examples=[
-            "lematt --test --init-notifications",
             "lematt --test --test-notification",
-            "/usr/local/bin/lematt-notify.sh failure 'Test failure'",
         ],
         see_also=["systemd", "monitoring", "health"],
         keywords=["notify", "alert", "slack", "email", "webhook"],

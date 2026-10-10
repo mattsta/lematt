@@ -227,6 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
     # Systemd management
     systemd_group = parser.add_argument_group("systemd automation")
     systemd_group.add_argument(
+        "--print-systemd-units",
+        dest="print_systemd_units",
+        action="store_true",
+        help="Print the systemd service and timer units (to install elsewhere)",
+    )
+    systemd_group.add_argument(
         "--install-systemd",
         dest="install_systemd",
         action="store_true",
@@ -247,7 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     systemd_group.add_argument(
         "--systemd-preset",
         dest="systemd_preset",
-        choices=["default", "aggressive", "conservative", "weekly"],
+        choices=["default", "aggressive", "conservative"],
         default="default",
         help="Systemd timer schedule preset (default: twice daily)",
     )
@@ -295,12 +301,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Notification configuration
     notify_group = parser.add_argument_group("notifications")
-    notify_group.add_argument(
-        "--init-notifications",
-        dest="init_notifications",
-        action="store_true",
-        help="Create example notification configuration file",
-    )
     notify_group.add_argument(
         "--test-notification",
         dest="test_notification",
@@ -401,27 +401,8 @@ def cmd_help_search(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_init_notifications(args: argparse.Namespace) -> int:
-    """--init-notifications: write an example notify.conf next to --config."""
-    from lematt.systemd import generate_notify_config
-
-    notify_path = Path(os.path.realpath(args.config)).parent / "notify.conf"
-    if notify_path.exists():
-        logger.error(f"Notification config already exists: {notify_path}")
-        return 1
-    try:
-        notify_path.parent.mkdir(parents=True, exist_ok=True)
-        notify_path.write_text(generate_notify_config())
-    except PermissionError:
-        logger.error(f"Permission denied writing {notify_path}")
-        return 1
-    logger.info(f"Created notification config: {notify_path}")
-    logger.info("Edit the file to configure your notification backends")
-    return 0
-
-
 def cmd_systemd(args: argparse.Namespace) -> int:
-    """--install-systemd / --uninstall-systemd / --systemd-status."""
+    """--print-systemd-units / --install-systemd / --uninstall-systemd / --systemd-status."""
     from lematt.systemd import PRESETS, SystemdConfig, SystemdInstaller
 
     preset = PRESETS.get(args.systemd_preset, PRESETS["default"])
@@ -431,10 +412,13 @@ def cmd_systemd(args: argparse.Namespace) -> int:
         description=preset.description,
         config_file=os.path.realpath(args.config),
         use_test_mode=args.is_test,
-        notify_on_failure=True,
-        notify_command="/usr/local/bin/lematt-notify.sh",
     )
     installer = SystemdInstaller(config=systemd_config, dry_run=args.dry_run)
+
+    if args.print_systemd_units:
+        for path, content in installer.generate_units().items():
+            print(f"# {path}\n{content}")
+        return 0
 
     if args.install_systemd:
         logger.info(f"Installing systemd timer ({args.systemd_preset} preset)")
@@ -802,9 +786,13 @@ STANDALONE_COMMANDS: list[tuple[Predicate, Callable[[argparse.Namespace], int]]]
     (lambda a: a.init_toml, cmd_init_toml),
     (lambda a: a.help_topic is not None, cmd_help_topic),
     (lambda a: a.help_search, cmd_help_search),
-    (lambda a: a.init_notifications, cmd_init_notifications),
     (
-        lambda a: a.install_systemd or a.uninstall_systemd or a.systemd_status,
+        lambda a: (
+            a.print_systemd_units
+            or a.install_systemd
+            or a.uninstall_systemd
+            or a.systemd_status
+        ),
         cmd_systemd,
     ),
 ]
