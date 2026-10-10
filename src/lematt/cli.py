@@ -769,7 +769,9 @@ def cmd_renew(ctx: Context) -> int:
     if config.is_dry_run:
         return run_renewal(ctx, domains)
     try:
-        with StateStore(Path(config.state_dir)).run_lock():
+        store = StateStore(Path(config.state_dir))
+        with store.run_lock():
+            store.rotate_history()
             return run_renewal(ctx, domains)
     except RunLockedError as e:
         logger.warning(f"Not starting: {e}")

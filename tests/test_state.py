@@ -105,7 +105,7 @@ def test_account_is_only_reused_for_the_same_directory_and_key(tmp_path):
     assert store.load_account("https://other-ca/dir", "thumb") is None
 
 
-def test_history_appends_events_and_rotates(tmp_path, monkeypatch):
+def test_history_appends_events_and_rotates_between_runs(tmp_path, monkeypatch):
     store = StateStore(tmp_path)
     store.record("issued", "a", serial="01", not_after=T0)
     store.record("renewal_failed", "b", error="boom")
@@ -118,8 +118,12 @@ def test_history_appends_events_and_rotates(tmp_path, monkeypatch):
     assert events[0]["not_after"] == "2026-10-10T12:00:00Z"
 
     monkeypatch.setattr("lematt.state.HISTORY_MAX_BYTES", 10)
-    store.record("issued", "c")
-    assert [e["cert"] for e in store.history()] == ["c"]
+    store.record("issued", "c")  # appends never rotate (workers run in parallel)
+    assert len(store.history()) == 3
+
+    store.rotate_history()  # once per run, under the run lock
+    store.record("issued", "d")
+    assert [e["cert"] for e in store.history()] == ["d"]
     assert (tmp_path / "history.jsonl.1").exists()
 
 

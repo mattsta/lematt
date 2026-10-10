@@ -4,7 +4,7 @@ Layout (under ``<config dir>/<prod|test>/state/``)::
 
     account.json         ACME account URL for (directory, account key)
     certs/<cert>.json    one file per certificate (name set + key type)
-    history.jsonl        append-only event log (rotated at 5 MB)
+    history.jsonl        append-only event log (rotated at 5 MB, between runs)
     run.lock             held for the duration of a renewal run
 
 Every JSON file carries a ``schema`` version and is written atomically, so
@@ -266,8 +266,6 @@ class StateStore:
         entry.update(_encode(details))
         path = self.root / "history.jsonl"
         try:
-            if path.exists() and path.stat().st_size > HISTORY_MAX_BYTES:
-                os.replace(path, path.with_suffix(".jsonl.1"))
             # One write() per line with O_APPEND, so concurrent workers'
             # lines don't interleave
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -277,6 +275,18 @@ class StateStore:
                 os.close(fd)
         except OSError as e:
             logger.warning(f"Could not record {event} in history: {e}")
+
+    def rotate_history(self) -> None:
+        """Move history.jsonl to history.jsonl.1 once it exceeds 5 MB.
+
+        Called once per run while holding the run lock (never from parallel
+        workers), so rotations can't race.
+        """
+        path = self.root / "history.jsonl"
+        if self.read_only or not path.exists():
+            return
+        if path.stat().st_size > HISTORY_MAX_BYTES:
+            os.replace(path, path.with_suffix(".jsonl.1"))
 
     def history(self) -> list[dict[str, Any]]:
         """All recorded events (current file only), oldest first."""
