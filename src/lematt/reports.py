@@ -7,7 +7,7 @@ and operational status.
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from rich.console import Group
@@ -50,6 +50,7 @@ class CertificateInventoryItem:
     san_domains: list[str] = field(default_factory=list)
     issuer: str | None = None
     file_size: int | None = None
+    renewal_due_at: datetime | None = None  # from the renewal policy
 
 
 @dataclass
@@ -117,6 +118,9 @@ class ReportGenerator:
                         san_domains=domain_config.san_domains,
                         issuer=health_item.issuer if health_item else None,
                         file_size=file_size,
+                        renewal_due_at=health_item.renewal_due_at
+                        if health_item
+                        else None,
                     )
                 )
 
@@ -125,14 +129,20 @@ class ReportGenerator:
     def build_renewal_schedule(
         self, renewal_threshold_days: int = 30
     ) -> list[RenewalScheduleItem]:
-        """Build renewal schedule based on expiry dates."""
+        """Build the renewal schedule.
+
+        Renewal dates come from lematt's renewal policy (ARI window or
+        lifetime rule) when health data has them; otherwise
+        ``renewal_threshold_days`` before expiry.
+        """
         schedule = []
-        now = datetime.now()
+        now = datetime.now(UTC).replace(tzinfo=None)  # certificate times are UTC
 
         for item in self.build_inventory():
             if item.not_after:
-                # Calculate renewal date (threshold days before expiry)
-                renewal_date = item.not_after - timedelta(days=renewal_threshold_days)
+                renewal_date = item.renewal_due_at or (
+                    item.not_after - timedelta(days=renewal_threshold_days)
+                )
                 days_until_renewal = (renewal_date - now).days
 
                 # Determine priority
