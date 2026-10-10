@@ -1,6 +1,7 @@
 """systemd units: runnable commands, install/uninstall, printing."""
 
 import sys
+from pathlib import Path
 
 from lematt.cli import main
 from lematt.systemd import (
@@ -12,7 +13,9 @@ from lematt.systemd import (
 
 
 def test_service_runs_lematt_with_an_explicit_mode_quietly():
-    prod = generate_service_unit(SystemdConfig(config_file="/etc/lematt/lematt.conf"))
+    prod = generate_service_unit(
+        SystemdConfig(config_file=Path("/etc/lematt/lematt.conf"))
+    )
     test = generate_service_unit(SystemdConfig(use_test_mode=True))
 
     assert (

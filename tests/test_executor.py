@@ -13,9 +13,9 @@ from lematt.manager import PrepareActionRunner
 @pytest.fixture
 def config(tmp_path):
     return LemattConfig(
-        config_base=str(tmp_path),
-        challenge_dir=str(tmp_path),
-        account_key=str(tmp_path / "account.key"),
+        config_base=tmp_path,
+        challenge_dir=tmp_path,
+        account_key=tmp_path / "account.key",
         is_dry_run=True,
     )
 

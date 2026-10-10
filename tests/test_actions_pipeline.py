@@ -36,9 +36,9 @@ def setup(tmp_path):
     log, pids = tmp_path / "actions.log", tmp_path / "prepare.pids"
     (tmp_path / "actions.conf").write_text(ACTIONS_CONF.format(log=log, pids=pids))
     config = LemattConfig(
-        config_base=str(tmp_path),
-        challenge_dir=str(tmp_path / "challenges"),
-        account_key=str(tmp_path / "account.key"),
+        config_base=tmp_path,
+        challenge_dir=tmp_path / "challenges",
+        account_key=tmp_path / "account.key",
     )
     runner = ActionRunner(config)
     runner.load_actions()
@@ -102,7 +102,7 @@ def test_prepare_runs_once_and_stays_alive_during_issuance(setup, monkeypatch):
 
     def fake_request(self, csr, output_path, **kwargs):
         alive_during_request.append(all(map(_alive, _wait_for_pids(pids))))
-        open(output_path, "w").close()
+        output_path.touch()
         return None  # success
 
     monkeypatch.setattr(CertificateManager, "request_certificate", fake_request)

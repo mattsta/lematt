@@ -33,7 +33,7 @@ class SystemdConfig:
     persistent: bool = True  # Run a missed timer on boot
 
     user: str = "root"
-    config_file: str = "/etc/lematt/lematt.conf"
+    config_file: Path = Path("/etc/lematt/lematt.conf")
     use_test_mode: bool = False
     python: str = field(default_factory=lambda: sys.executable)
     extra_args: list[str] = field(default_factory=list)
@@ -49,7 +49,7 @@ class SystemdConfig:
             "-m",
             "lematt",
             "--config",
-            self.config_file,
+            str(self.config_file),
             mode,
             "--cron",
         ]
@@ -68,7 +68,7 @@ def generate_service_unit(config: SystemdConfig) -> str:
         "[Service]",
         "Type=oneshot",
         f"User={config.user}",
-        f"WorkingDirectory={Path(config.config_file).parent}",
+        f"WorkingDirectory={config.config_file.parent}",
         f"ExecStart={config.command}",
         f"TimeoutStartSec={config.timeout_start_sec}",
         # Exit 75: another run still holds the lock; not a failure

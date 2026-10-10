@@ -10,7 +10,6 @@ import contextlib
 import dataclasses
 import datetime
 import json
-import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -55,7 +54,7 @@ class Context:
 
 
 def load_configuration(
-    config_path: str, *, require_write_access: bool
+    config_path: Path, *, require_write_access: bool
 ) -> ConfigLoader | None:
     """Load and validate the configuration, logging any problems.
 
@@ -66,9 +65,8 @@ def load_configuration(
     Returns:
         The loaded configuration, or None if it is unusable.
     """
-    path = Path(config_path)
     loader = ConfigLoader(
-        config_base=Path(os.path.realpath(path)).parent, config_file=path
+        config_base=config_path.resolve().parent, config_file=config_path
     )
     try:
         loader.load()
@@ -168,7 +166,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         dest="config",
-        default="conf/lematt.conf",
+        type=Path,
+        default=Path("conf/lematt.conf"),
         help="Path to lematt.conf (other configs in same directory)",
     )
     parser.add_argument(
@@ -345,6 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     health_group.add_argument(
         "--write-health",
         dest="write_health",
+        type=Path,
         metavar="PATH",
         help="Write health status to file (for monitoring)",
     )
@@ -389,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui_group.add_argument(
         "--report-output",
         dest="report_output",
+        type=Path,
         metavar="PATH",
         help="Save report to file (auto-detects format from extension)",
     )
@@ -426,7 +427,7 @@ def cmd_init_toml(args: argparse.Namespace) -> int:
     """--init-toml: write an example lematt.toml next to --config."""
     from lematt.config_loader import create_example_toml
 
-    toml_path = Path(os.path.realpath(args.config)).parent / "lematt.toml"
+    toml_path = args.config.resolve().parent / "lematt.toml"
     if toml_path.exists():
         logger.error(f"Config file already exists: {toml_path}")
         return 1
@@ -460,7 +461,7 @@ def cmd_systemd(args: argparse.Namespace) -> int:
         calendar=preset.calendar,
         randomized_delay_sec=preset.randomized_delay_sec,
         description=preset.description,
-        config_file=os.path.realpath(args.config),
+        config_file=args.config.resolve(),
         use_test_mode=args.is_test,
     )
     installer = SystemdInstaller(config=systemd_config, dry_run=args.dry_run)
@@ -602,7 +603,7 @@ def cmd_health(ctx: Context) -> int:
             )
 
     if args.write_health:
-        health_path = Path(args.write_health)
+        health_path = args.write_health
         fmt = "prometheus" if args.prometheus_output else "json"
         write_health_status_file(health, health_path, format=fmt)
         logger.info(f"Wrote health status to {health_path}")
@@ -657,7 +658,7 @@ def cmd_report(ctx: Context) -> int:
         critical_days=args.critical_days,
     ).check_all_certificates(ctx.domains)
 
-    output_path = Path(args.report_output) if args.report_output else None
+    output_path = args.report_output
     output_format = args.report_format
     if output_path and output_path.suffix == ".json":
         output_format = "json"
@@ -734,7 +735,7 @@ def cmd_caa_records(ctx: Context) -> int:
     account_url = None
     try:
         thumbprint = AccountKey.from_file(config.account_key).thumbprint
-        saved = StateStore(Path(config.state_dir)).load_account(
+        saved = StateStore(config.state_dir).load_account(
             config.acme_directory_url, thumbprint
         )
         account_url = saved.account_url if saved else None
@@ -838,7 +839,7 @@ def cmd_revoke(ctx: Context) -> int:
             manager.revoke(captured, args.revoke_reason)
         return 0
 
-    store = StateStore(Path(config.state_dir))
+    store = StateStore(config.state_dir)
     try:
         with store.run_lock():
             started = utcnow().replace(microsecond=0)
@@ -902,7 +903,7 @@ def cmd_renew(ctx: Context) -> int:
         for domain in domains:
             logger.info(f"\t{domain}")
 
-    if not os.path.isfile(config.account_key):
+    if not config.account_key.is_file():
         logger.error(f"Account key doesn't exist: {config.account_key}")
         logger.error("Create with: openssl genrsa 4096 > key.pem")
         return 1
@@ -910,7 +911,7 @@ def cmd_renew(ctx: Context) -> int:
     if config.is_dry_run:
         return run_renewal(ctx, domains)
     try:
-        store = StateStore(Path(config.state_dir))
+        store = StateStore(config.state_dir)
         with store.run_lock():
             store.rotate_history()
             return run_renewal(ctx, domains)
@@ -924,7 +925,7 @@ def send_run_notifications(ctx: Context, *, since: datetime.datetime) -> None:
     manager = notification_manager(ctx)
     if manager is None:
         return
-    store = StateStore(Path(ctx.config.state_dir))
+    store = StateStore(ctx.config.state_dir)
     history = [
         entry
         for entry in store.history()

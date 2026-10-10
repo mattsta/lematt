@@ -181,7 +181,7 @@ class CertificateTable(Container):
                 days,
             )
             if not self.compact_mode:
-                row = (*row, cert.cert_path or "")
+                row = (*row, str(cert.cert_path or ""))
 
             table.add_row(*row)
 

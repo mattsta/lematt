@@ -19,7 +19,7 @@ NOW = datetime.datetime.now(datetime.UTC).replace(tzinfo=None, microsecond=0)
 
 @pytest.fixture
 def config(tmp_path):
-    config = LemattConfig(config_base=str(tmp_path), challenge_dir="", account_key="")
+    config = LemattConfig(config_base=tmp_path, challenge_dir="", account_key="")
     for sub in ("cert", "state"):
         (tmp_path / "prod" / sub).mkdir(parents=True)
     return config
@@ -39,9 +39,7 @@ def write_cert(config, key_type, *, lifetime_days: float, days_left: float) -> N
         .not_valid_after(not_after)
         .sign(key, hashes.SHA256())
     )
-    path = config.get_cert_path(DOMAIN, key_type)
-    with open(path, "wb") as f:
-        f.write(cert.public_bytes(Encoding.PEM))
+    config.get_cert_path(DOMAIN, key_type).write_bytes(cert.public_bytes(Encoding.PEM))
 
 
 def check(config, **thresholds):

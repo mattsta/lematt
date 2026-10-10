@@ -254,9 +254,9 @@ class AcmeClient:
 def issue_certificate(
     *,
     directory_url: str,
-    account_key_path: str | Path,
+    account_key_path: Path,
     csr_pem: bytes,
-    challenge_dir: str | Path,
+    challenge_dir: Path,
     context: str = "",
     profile: str | None = None,
     replaces: str | None = None,
@@ -274,7 +274,7 @@ def issue_certificate(
     if transport.kid is None:
         client.register_account()
     order = client.new_order(csr_names(csr_pem), profile=profile, replaces=replaces)
-    client.complete_authorizations(order, solver or Http01Solver(Path(challenge_dir)))
+    client.complete_authorizations(order, solver or Http01Solver(challenge_dir))
     order = client.finalize(order, csr_pem)
     issued = client.download_certificate(order)
     client.log("✅ Certificate issued")

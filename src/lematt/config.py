@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
+from pathlib import Path
 
 from loguru import logger
 
@@ -66,7 +67,7 @@ class CertificateInfo:
     """Information about a certificate's status and expiration."""
 
     exists: bool
-    path: str
+    path: Path
     not_after: datetime.datetime | None = None
     not_before: datetime.datetime | None = None
     subject_cn: str | None = None
@@ -193,10 +194,10 @@ class RenewalSettings:
 class LemattConfig:
     """Global configuration for lematt."""
 
-    # Paths
-    config_base: str
-    challenge_dir: str
-    account_key: str
+    # Paths (strings are accepted and normalized to Path)
+    config_base: Path
+    challenge_dir: Path
+    account_key: Path
 
     # Certificate settings
     reauthorize_days: float | None = None  # None: follow the CA's guidance
@@ -223,7 +224,10 @@ class LemattConfig:
     production_url: str = "https://acme-v02.api.letsencrypt.org/directory"
 
     def __post_init__(self) -> None:
-        """Set default tags if not provided."""
+        """Normalize paths and set default filename tags."""
+        self.config_base = Path(self.config_base)
+        self.challenge_dir = Path(self.challenge_dir)
+        self.account_key = Path(self.account_key)
         if not self.rsa_tag:
             self.rsa_tag = f"rsa{self.rsa_key_bits}"
         if not self.curve_tag:
@@ -242,15 +246,14 @@ class LemattConfig:
             generate_new_certs_after_days=self.generate_new_certs_after_days,
         )
 
-    def get_subdir(self, subdir: str) -> str:
-        """Get the appropriate subdirectory based on test/prod mode."""
-        base = "test/" if self.is_test else "prod/"
-        return base + subdir
+    def mode_dir(self, kind: str) -> Path:
+        """``<config dir>/<prod|test>/<kind>`` (kind: key, cert, csr, state)."""
+        return self.config_base / ("test" if self.is_test else "prod") / kind
 
     @property
-    def state_dir(self) -> str:
+    def state_dir(self) -> Path:
         """Directory holding lematt's persistent state for this mode."""
-        return f"{self.config_base}/{self.get_subdir('state')}"
+        return self.mode_dir("state")
 
     def key_tag(self, key_type: KeyType) -> str:
         return self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
@@ -263,23 +266,30 @@ class LemattConfig:
         """Stable identifier for one certificate (its name set and key)."""
         return f"{domain_config.filename_base}.{self.key_tag(key_type)}"
 
-    def get_cert_path(self, domain_config: DomainConfig, key_type: KeyType) -> str:
-        """Generate the certificate file path."""
-        tag = self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
-        test_suffix = ".test" if self.is_test else ""
-        return f"{self.config_base}/{self.get_subdir('cert')}/{domain_config.filename_base}-cert-combined.{tag}{test_suffix}.pem"
+    def _file(
+        self, kind: str, name: str, role: str, key_type: KeyType, ext: str
+    ) -> Path:
+        test = ".test" if self.is_test else ""
+        return (
+            self.mode_dir(kind) / f"{name}-{role}.{self.key_tag(key_type)}{test}.{ext}"
+        )
 
-    def get_key_path(self, domain_config: DomainConfig, key_type: KeyType) -> str:
-        """Generate the private key file path."""
-        tag = self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
-        test_suffix = ".test" if self.is_test else ""
-        return f"{self.config_base}/{self.get_subdir('key')}/{domain_config.filename_base}-key.{tag}{test_suffix}.pem"
+    def cert_path_for(self, name: str, key_type: KeyType) -> Path:
+        """Certificate chain file for a filename base or a SAN's symlink name."""
+        return self._file("cert", name, "cert-combined", key_type, "pem")
 
-    def get_csr_path(self, domain_config: DomainConfig, key_type: KeyType) -> str:
-        """Generate the CSR file path."""
-        tag = self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
-        test_suffix = ".test" if self.is_test else ""
-        return f"{self.config_base}/{self.get_subdir('csr')}/{domain_config.filename_base}-csr.{tag}{test_suffix}.csr"
+    def key_path_for(self, name: str, key_type: KeyType) -> Path:
+        """Private key file for a filename base or a SAN's symlink name."""
+        return self._file("key", name, "key", key_type, "pem")
+
+    def get_cert_path(self, domain_config: DomainConfig, key_type: KeyType) -> Path:
+        return self.cert_path_for(domain_config.filename_base, key_type)
+
+    def get_key_path(self, domain_config: DomainConfig, key_type: KeyType) -> Path:
+        return self.key_path_for(domain_config.filename_base, key_type)
+
+    def get_csr_path(self, domain_config: DomainConfig, key_type: KeyType) -> Path:
+        return self._file("csr", domain_config.filename_base, "csr", key_type, "csr")
 
 
 @dataclass
@@ -290,8 +300,8 @@ class CertificateResult:
     key_type: KeyType
     success: bool
     renewed: bool = False
-    cert_path: str | None = None
-    key_path: str | None = None
+    cert_path: Path | None = None
+    key_path: Path | None = None
     error_message: str | None = None
 
     @property

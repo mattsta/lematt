@@ -47,15 +47,15 @@ def generate_private_key(
     )
 
 
-def load_private_key(path: str | Path) -> PrivateKey:
+def load_private_key(path: Path) -> PrivateKey:
     """Load an unencrypted PEM private key (RSA or EC)."""
-    key = serialization.load_pem_private_key(Path(path).read_bytes(), password=None)
+    key = serialization.load_pem_private_key(path.read_bytes(), password=None)
     if not isinstance(key, rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey):
         raise ValueError(f"{path}: unsupported key type {type(key).__name__}")
     return key
 
 
-def create_csr(private_key_path: str | Path, domains: list[str]) -> bytes:
+def create_csr(private_key_path: Path, domains: list[str]) -> bytes:
     """Create a PEM CSR for the given names (primary name first).
 
     Every name goes into subjectAltName. The primary name is also the
@@ -79,23 +79,23 @@ def create_csr(private_key_path: str | Path, domains: list[str]) -> bytes:
     return csr.public_bytes(serialization.Encoding.PEM)
 
 
-def write_file_atomically(path: str | Path, data: bytes, mode: int = 0o644) -> None:
+def write_file_atomically(path: Path, data: bytes, mode: int = 0o644) -> None:
     """Replace ``path`` with ``data`` so readers never see a partial file.
 
     The data is written to a temporary file in the same directory (created
     with ``mode``), flushed to disk, then renamed over ``path``.
     """
-    target = Path(path)
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    tmp = Path(name)
     try:
         os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, target)
+        tmp.replace(path)
     except BaseException:
-        Path(tmp).unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)
         raise
 
 
@@ -104,14 +104,12 @@ def _utc(moment: datetime.datetime) -> datetime.datetime:
     return moment.astimezone(datetime.UTC).replace(tzinfo=None)
 
 
-def get_certificate_info(cert_path: str | Path) -> CertificateInfo:
+def get_certificate_info(path: Path) -> CertificateInfo:
     """Read the leaf (first) certificate of a PEM file."""
-    path = str(cert_path)
-    if not os.path.isfile(path):
-        return CertificateInfo(exists=False, path=path)
-
     try:
-        cert = x509.load_pem_x509_certificate(Path(path).read_bytes())
+        cert = x509.load_pem_x509_certificate(path.read_bytes())
+    except FileNotFoundError:
+        return CertificateInfo(exists=False, path=path)
     except Exception as e:
         return CertificateInfo(exists=True, path=path, parse_error=str(e))
 
@@ -187,10 +185,10 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def csr_matches(csr_path: str | Path, key_path: str | Path, domains: list[str]) -> bool:
+def csr_matches(csr_path: Path, key_path: Path, domains: list[str]) -> bool:
     """Whether a CSR is for this private key and exactly these names."""
     try:
-        csr = x509.load_pem_x509_csr(Path(csr_path).read_bytes())
+        csr = x509.load_pem_x509_csr(csr_path.read_bytes())
         key = load_private_key(key_path)
         san = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
     except OSError, ValueError, x509.ExtensionNotFound:

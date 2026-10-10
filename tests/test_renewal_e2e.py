@@ -2,7 +2,6 @@
 
 import datetime
 import json
-import os
 import sys
 
 import pytest
@@ -89,9 +88,8 @@ def test_renewal_issues_links_and_deploys(monkeypatch, setup, capsys):
             "www.example.com",
         ]
     # SAN names get symlinks to the combined certificate
-    assert os.readlink(certs / "www.example.com-cert-combined.rsa2048.test.pem") == (
-        rsa_cert.name
-    )
+    link = certs / "www.example.com-cert-combined.rsa2048.test.pem"
+    assert link.readlink() == rsa_cert.relative_to(certs)
     assert len(server.issued) == 4  # 2 certificates x (RSA + EC)
     # http-01 validated once per name; the EC orders reused the authorizations
     assert server.count("POST", "/challenge") == 3
@@ -459,7 +457,7 @@ def test_one_key_types_crash_keeps_the_others_certificate(monkeypatch, setup):
     real = lematt.manager.CertificateManager.request_certificate
 
     def ec_crashes(self, csr_path, output_path, *args, **kwargs):
-        if "prime256v1" in output_path:
+        if "prime256v1" in output_path.name:
             raise KeyError("identifier")  # e.g. malformed CA response
         return real(self, csr_path, output_path, *args, **kwargs)
 

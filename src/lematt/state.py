@@ -288,7 +288,7 @@ class StateStore:
         if self.read_only or not path.exists():
             return
         if path.stat().st_size > HISTORY_MAX_BYTES:
-            os.replace(path, path.with_suffix(".jsonl.1"))
+            path.replace(path.with_suffix(".jsonl.1"))
 
     def history(self) -> list[dict[str, Any]]:
         """All recorded events (current file only), oldest first."""

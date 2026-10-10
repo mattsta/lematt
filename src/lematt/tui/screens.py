@@ -1,6 +1,7 @@
 """Screen definitions for the Textual dashboard application."""
 
 import json
+from pathlib import Path
 from typing import Any, ClassVar
 
 from rich.table import Table
@@ -262,7 +263,7 @@ class CertificateDetailScreen(Screen):
 
         # File paths
         if self.certificate.cert_path:
-            table.add_row("Certificate Path:", self.certificate.cert_path)
+            table.add_row("Certificate Path:", str(self.certificate.cert_path))
 
         # Additional details from dict
         if self.certificate.details:
@@ -283,7 +284,9 @@ class CertificateDetailScreen(Screen):
             "days_until_expiry": self.certificate.days_until_expiry,
             "message": self.certificate.message,
             "issuer": self.certificate.issuer,
-            "cert_path": self.certificate.cert_path,
+            "cert_path": str(self.certificate.cert_path)
+            if self.certificate.cert_path
+            else None,
         }
 
         if self.certificate.not_after:
@@ -293,12 +296,10 @@ class CertificateDetailScreen(Screen):
         if self.certificate.details:
             data["details"] = self.certificate.details
 
-        # Write to file
-        filename = f"{self.certificate.domain}-{self.certificate.key_type}.json"
+        export = Path(f"{self.certificate.domain}-{self.certificate.key_type}.json")
         try:
-            with open(filename, "w") as f:
-                json.dump(data, f, indent=2)
-            # Would show notification here in a real app
-        except Exception:
-            # Would show error notification here
-            pass
+            export.write_text(json.dumps(data, indent=2) + "\n")
+        except OSError as e:
+            self.app.notify(f"Export failed: {e}", severity="error")
+            return
+        self.app.notify(f"Exported {export.resolve()}")

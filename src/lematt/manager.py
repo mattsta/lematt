@@ -7,14 +7,14 @@ all certificate generation, renewal, and management operations.
 import contextlib
 import datetime
 import os
-import pathlib
+import secrets
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cryptography import x509
@@ -79,7 +79,7 @@ def warn_if_ssh_lacks_forced_tty(command: str) -> None:
         tokens = shlex.split(command)
     except ValueError:
         return
-    if not any(os.path.basename(t) == "ssh" for t in tokens):
+    if not any(Path(token).name == "ssh" for token in tokens):
         return
     if "-t" in tokens and "-tt" not in tokens and tokens.count("-t") == 1:
         _warned_ssh_commands.add(command)
@@ -220,7 +220,6 @@ class PrepareActionRunner:
         Args:
             processes: Specific processes to kill. If None, kills all tracked processes.
         """
-        import os
         import signal
 
         procs = processes if processes is not None else self._processes
@@ -318,35 +317,14 @@ class CertificateManager:
             logger.debug(full_message)
 
     def ensure_directories(self) -> None:
-        """Create required directory hierarchy."""
-        for name in ["key", "cert", "csr"]:
-            subdir = self.config.get_subdir(name)
-            adir = pathlib.Path(f"{self.config.config_base}/{subdir}")
-            adir.mkdir(parents=True, exist_ok=True)
-
-    def get_customized_name(
-        self,
-        subdir: str,
-        name: str,
-        subtype: str,
-        key_type: KeyType,
-        ext: str = "pem",
-    ) -> str:
-        """Generate a customized filename for keys, certs, or CSRs."""
-        tag = self.config.rsa_tag if key_type == KeyType.RSA else self.config.curve_tag
-        test_suffix = ".test" if self.config.is_test else ""
-        return (
-            f"{self.config.config_base}/"
-            f"{self.config.get_subdir(subdir)}/"
-            f"{name}-{subtype}.{tag}{test_suffix}.{ext}"
-        )
+        """Create the key, certificate and CSR directories for this mode."""
+        for kind in ("key", "cert", "csr"):
+            self.config.mode_dir(kind).mkdir(parents=True, exist_ok=True)
 
     @property
     def store(self) -> StateStore:
         """Persistent state for this mode (read-only during dry runs)."""
-        return StateStore(
-            pathlib.Path(self.config.state_dir), read_only=self.config.is_dry_run
-        )
+        return StateStore(self.config.state_dir, read_only=self.config.is_dry_run)
 
     def load_state(
         self, domain_config: DomainConfig, key_type: KeyType, info: CertificateInfo
@@ -486,8 +464,8 @@ class CertificateManager:
 
     def request_certificate(
         self,
-        csr_path: str,
-        output_path: str,
+        csr_path: Path,
+        output_path: Path,
         max_retries: int = 3,
         domain_context: str = "",
         *,
@@ -519,7 +497,7 @@ class CertificateManager:
         """
         session = session or self.new_session()
         try:
-            csr_pem = pathlib.Path(csr_path).read_bytes()
+            csr_pem = csr_path.read_bytes()
         except OSError as e:
             return RequestFailure(f"cannot read CSR: {e}")
         account_replaced = False
@@ -567,7 +545,7 @@ class CertificateManager:
                 return RequestFailure(str(e))
 
     def record_success(
-        self, plan: RenewalPlan, cert_path: str, *, profile: str | None = None
+        self, plan: RenewalPlan, cert_path: Path, *, profile: str | None = None
     ) -> None:
         """Remember a newly issued certificate and reset failure backoff."""
         now = utcnow()
@@ -619,7 +597,7 @@ class CertificateManager:
 
     def generate_key(
         self,
-        output_path: str,
+        output_path: Path,
         key_type: KeyType,
     ) -> bool:
         """Generate a private key (written atomically with 0600 permissions).
@@ -649,9 +627,9 @@ class CertificateManager:
 
     def generate_csr(
         self,
-        private_key_path: str,
+        private_key_path: Path,
         domains: list[str],
-        output_path: str,
+        output_path: Path,
     ) -> bool:
         """Generate a Certificate Signing Request.
 
@@ -672,31 +650,22 @@ class CertificateManager:
             return False
 
     def create_atomic_symlink(
-        self,
-        target: str,
-        link_path: str,
-        key_type: KeyType,
+        self, target: Path, link: Path, key_type: KeyType
     ) -> bool:
-        """Create a symlink atomically to avoid race conditions.
+        """Point ``link`` at ``target``'s file name (same directory), atomically.
 
-        Args:
-            target: The target file (just the filename, not full path).
-            link_path: The full path for the symlink.
-            key_type: Key type for logging.
-
-        Returns:
-            True if successful, False otherwise.
+        The link is created under a temporary name and renamed into place, so
+        readers never see it missing.
         """
-        self.log(f"Linking {target} to {link_path}", str(key_type), update=True)
-        temp_link = tempfile.mktemp(dir=os.path.dirname(link_path))
+        self.log(f"Linking {target.name} to {link}", str(key_type), update=True)
+        temp = link.with_name(f".{link.name}.{secrets.token_hex(6)}")
         try:
-            os.symlink(target, temp_link)
-            os.replace(temp_link, link_path)
+            temp.symlink_to(target.name)
+            temp.replace(link)
             return True
         except OSError as e:
-            self.log(f"Warning: Could not create symlink {link_path}: {e}", "WARN")
-            with contextlib.suppress(OSError):
-                os.unlink(temp_link)
+            self.log(f"Warning: Could not create symlink {link}: {e}", "WARN")
+            temp.unlink(missing_ok=True)
             return False
 
     def process_domain_all_keys(
@@ -836,11 +805,9 @@ class CertificateManager:
         # certificate for it has been issued, so a failed renewal never leaves
         # a key on disk that doesn't match the deployed certificate.
         staged_key, staged_csr, staged_cert = (
-            f"{p}.new" for p in (private_key, csr, cert)
+            p.with_name(f"{p.name}.new") for p in (private_key, csr, cert)
         )
-        rotate_key = self.config.always_generate_new_keys or not os.path.isfile(
-            private_key
-        )
+        rotate_key = self.config.always_generate_new_keys or not private_key.is_file()
         if rotate_key and not self.generate_key(staged_key, key_type):
             return result(success=False, renewed=True, error="Key generation failed")
 
@@ -886,19 +853,15 @@ class CertificateManager:
             (staged_csr, csr),
             (staged_cert, cert),
         ):
-            if os.path.exists(staged):
-                os.replace(staged, live)
+            if staged.exists():
+                staged.replace(live)
 
-        for domain in domain_config.san_domains:
+        for name in domain_config.san_domains:
             self.create_atomic_symlink(
-                os.path.basename(private_key),
-                self.get_customized_name("key", domain, "key", key_type),
-                key_type,
+                private_key, self.config.key_path_for(name, key_type), key_type
             )
             self.create_atomic_symlink(
-                os.path.basename(cert),
-                self.get_customized_name("cert", domain, "cert-combined", key_type),
-                key_type,
+                cert, self.config.cert_path_for(name, key_type), key_type
             )
         self.record_success(plan, cert, profile=self.config.profile_for(domain_config))
         return result(success=True, renewed=True)
@@ -908,17 +871,11 @@ class CertificateManager:
     ) -> CapturedCertificate | None:
         """The certificate (and its key) currently on disk, or None."""
         try:
-            cert_pem = pathlib.Path(
-                self.config.get_cert_path(domain_config, key_type)
-            ).read_bytes()
+            cert_pem = self.config.get_cert_path(domain_config, key_type).read_bytes()
         except FileNotFoundError:
             return None
-        try:
-            key_pem = pathlib.Path(
-                self.config.get_key_path(domain_config, key_type)
-            ).read_bytes()
-        except FileNotFoundError:
-            key_pem = None
+        key_path = self.config.get_key_path(domain_config, key_type)
+        key_pem = key_path.read_bytes() if key_path.is_file() else None
         return CapturedCertificate(domain_config, key_type, cert_pem, key_pem)
 
     def revoke(
@@ -998,7 +955,7 @@ class CertificateManager:
                     "san_domains": domain_config.san_domains,
                     "key_type": key_type.name.lower(),
                     "profile": self.config.profile_for(domain_config),
-                    "cert_path": info.path,
+                    "cert_path": str(info.path),
                     "exists": info.exists,
                     "expires": info.not_after.isoformat() if info.not_after else None,
                     "days_until_expiry": info.days_until_expiry,
@@ -1150,11 +1107,10 @@ class CertificateManager:
         return None
 
 
-def _discard(*paths: str) -> None:
+def _discard(*paths: Path) -> None:
     """Remove staged files of an abandoned renewal."""
     for path in paths:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(path)
+        path.unlink(missing_ok=True)
 
 
 def _rejects_replaces(error: AcmeError) -> bool:

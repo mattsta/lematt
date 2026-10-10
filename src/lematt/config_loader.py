@@ -15,7 +15,6 @@ message.
 
 import configparser
 import json
-import os
 import re
 import tomllib
 from collections.abc import Iterable
@@ -438,8 +437,9 @@ class ConfigLoader:
                     f"Missing required config: '{key_name(ini_key, toml_key)}'"
                 )
 
-        challenge_dir = config.get("challenge_dir")
-        if require_write_access and challenge_dir and not os.path.isdir(challenge_dir):
+        raw_challenge_dir = config.get("challenge_dir")
+        challenge_dir = Path(raw_challenge_dir) if raw_challenge_dir else None
+        if require_write_access and challenge_dir and not challenge_dir.is_dir():
             errors.append(f"Challenge directory does not exist: {challenge_dir}")
             errors.append(f"  Create it with: mkdir -p {challenge_dir}")
 
@@ -490,7 +490,7 @@ class ConfigLoader:
         ec_curve = config.get("ec_curve", "prime256v1")
 
         return LemattConfig(
-            config_base=str(self.config_base),
+            config_base=self.config_base,
             challenge_dir=config.get("challenge_dir", ""),
             account_key=config.get("account_key", ""),
             reauthorize_days=config.get("reauthorize_days"),

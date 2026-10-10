@@ -53,7 +53,7 @@ class CertificateHealth:
     key_type: str
     status: HealthStatus
     message: str
-    cert_path: str | None = None
+    cert_path: Path | None = None
     days_until_expiry: int | None = None
     not_after: datetime.datetime | None = None
     issuer: str | None = None
@@ -71,7 +71,7 @@ class CertificateHealth:
             "key_type": self.key_type,
             "status": str(self.status),
             "message": self.message,
-            "cert_path": self.cert_path,
+            "cert_path": str(self.cert_path) if self.cert_path else None,
             "days_until_expiry": self.days_until_expiry,
             "not_after": self.not_after.isoformat() if self.not_after else None,
             "issuer": self.issuer,
@@ -161,7 +161,7 @@ class HealthChecker:
                 key_type=key_type,
                 status=HealthStatus.CRITICAL,
                 message="Certificate file not found",
-                cert_path=str(cert_path),
+                cert_path=cert_path,
             )
         if info.parse_error or info.not_after is None:
             return CertificateHealth(
@@ -169,7 +169,7 @@ class HealthChecker:
                 key_type=key_type,
                 status=HealthStatus.UNKNOWN,
                 message=f"Failed to parse certificate: {info.parse_error}",
-                cert_path=str(cert_path),
+                cert_path=cert_path,
             )
 
         now = _utcnow()
@@ -191,7 +191,7 @@ class HealthChecker:
             key_type=key_type,
             status=status,
             message=message,
-            cert_path=str(cert_path),
+            cert_path=cert_path,
             days_until_expiry=days_until_expiry,
             not_after=info.not_after,
             issuer=info.issuer_dn,
@@ -411,7 +411,7 @@ class HealthChecker:
             for key_type in key_types:
                 kt = KeyType.from_string(key_type)
                 health = self.check_certificate_file(
-                    Path(self.config.get_cert_path(domain_config, kt)),
+                    self.config.get_cert_path(domain_config, kt),
                     domain_config.primary_domain,
                     key_type,
                     plan=manager.plan(domain_config, kt, now),
@@ -477,7 +477,7 @@ class HealthChecker:
                         details={
                             "domain": cert.domain,
                             "key_type": cert.key_type,
-                            "cert_path": cert.cert_path or "unknown",
+                            "cert_path": str(cert.cert_path or "unknown"),
                         },
                     )
                 else:

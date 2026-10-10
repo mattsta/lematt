@@ -35,9 +35,9 @@ def test_ocsp_action_setting_is_ignored_with_warning(tmp_path, capsys):
     )
     runner = ActionRunner(
         LemattConfig(
-            config_base=str(tmp_path),
-            challenge_dir=str(tmp_path),
-            account_key=str(tmp_path / "account.key"),
+            config_base=tmp_path,
+            challenge_dir=tmp_path,
+            account_key=tmp_path / "account.key",
         )
     )
 

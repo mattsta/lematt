@@ -15,9 +15,9 @@ from lematt.tui.widgets import CertificateTable
 @pytest.mark.asyncio
 async def test_dashboard_loads_switches_views_and_quits(tmp_path):
     config = LemattConfig(
-        config_base=str(tmp_path),
-        challenge_dir=str(tmp_path),
-        account_key=str(tmp_path / "account.key"),
+        config_base=tmp_path,
+        challenge_dir=tmp_path,
+        account_key=tmp_path / "account.key",
     )
     domains = [DomainConfig("example.com", ["www.example.com"]), DomainConfig("b.org")]
     app = LemattDashboardApp(

@@ -34,8 +34,8 @@ class AccountKey:
     key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey
 
     @classmethod
-    def from_file(cls, path: str | Path) -> AccountKey:
-        return cls.from_pem(Path(path).read_bytes(), source=str(path))
+    def from_file(cls, path: Path) -> AccountKey:
+        return cls.from_pem(path.read_bytes(), source=str(path))
 
     @classmethod
     def from_pem(cls, pem: bytes, *, source: str = "key") -> AccountKey:

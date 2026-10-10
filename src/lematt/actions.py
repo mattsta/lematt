@@ -9,7 +9,6 @@ import itertools
 import shlex
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -64,7 +63,7 @@ class ActionRunner:
 
     def load_actions(self) -> None:
         """Load actions from actions.conf in the configuration directory."""
-        self.actions = load_actions_ini(Path(self.config.config_base) / "actions.conf")
+        self.actions = load_actions_ini(self.config.config_base / "actions.conf")
 
     def run_command(
         self,
@@ -178,24 +177,14 @@ class ActionRunner:
             domain_tuples: Set of domain tuples (each tuple is domains on one cert).
             action_config: ActionConfig with commands to run.
         """
-        # Build replacement patterns
-        # Use shlex.quote for domain names, but preserve glob pattern
+        # CERTS/KEYS: one quoted glob per name (matching every key type and
+        # the SAN symlinks), with the trailing * left unquoted
+        names = [domain for domains in domain_tuples for domain in domains]
+        cert_dir, key_dir = self.config.mode_dir("cert"), self.config.mode_dir("key")
         replace_cert = " ".join(
-            shlex.quote(
-                f"{self.config.config_base}/{self.config.get_subdir('cert')}/{domain}"
-            )
-            + "*"
-            for domains in domain_tuples
-            for domain in domains
+            shlex.quote(str(cert_dir / name)) + "*" for name in names
         )
-        replace_key = " ".join(
-            shlex.quote(
-                f"{self.config.config_base}/{self.config.get_subdir('key')}/{domain}"
-            )
-            + "*"
-            for domains in domain_tuples
-            for domain in domains
-        )
+        replace_key = " ".join(shlex.quote(str(key_dir / name)) + "*" for name in names)
 
         # Get first domain (CN) from each tuple
         first_domains = [domains[0] for domains in domain_tuples]

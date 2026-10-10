@@ -45,8 +45,8 @@ class CertificateInventoryItem:
     status: str
     days_until_expiry: int | None
     not_after: datetime | None
-    cert_path: str | None
-    key_path: str | None
+    cert_path: Path
+    key_path: Path
     san_domains: list[str] = field(default_factory=list)
     issuer: str | None = None
     file_size: int | None = None
@@ -99,10 +99,7 @@ class ReportGenerator:
                 cert_path = self.config.get_cert_path(domain_config, key_type)
                 key_path = self.config.get_key_path(domain_config, key_type)
 
-                # Get file size if path exists
-                file_size = None
-                if cert_path and Path(cert_path).exists():
-                    file_size = Path(cert_path).stat().st_size
+                file_size = cert_path.stat().st_size if cert_path.is_file() else None
 
                 inventory.append(
                     CertificateInventoryItem(
@@ -258,7 +255,7 @@ class ReportRenderer:
                     expires,
                     days_text,
                     san_text,
-                    item.cert_path or "-",
+                    str(item.cert_path),
                 )
             else:
                 table.add_row(
@@ -577,7 +574,7 @@ class Report:
                     "status": item.status,
                     "days_until_expiry": item.days_until_expiry,
                     "not_after": item.not_after.isoformat() if item.not_after else None,
-                    "cert_path": item.cert_path,
+                    "cert_path": str(item.cert_path),
                     "san_domains": item.san_domains,
                     "issuer": item.issuer,
                 }

@@ -19,9 +19,9 @@ def make_transport(directory_url: str, account_key: AccountKey) -> AcmeTransport
     return AcmeTransport(directory_url, account_key)
 
 
-def make_solver(challenge_dir: str) -> Http01Solver:
+def make_solver(challenge_dir: Path) -> Http01Solver:
     """Create the http-01 challenge solver (replaceable in tests)."""
-    return Http01Solver(Path(challenge_dir))
+    return Http01Solver(challenge_dir)
 
 
 @dataclass
@@ -29,8 +29,8 @@ class AcmeSession:
     """Lazily connects to the CA and resolves the account once."""
 
     directory_url: str
-    account_key_path: str
-    challenge_dir: str
+    account_key_path: Path
+    challenge_dir: Path
     store: StateStore
     _transport: AcmeTransport | None = field(default=None, repr=False)
 

@@ -24,9 +24,9 @@ from lematt.renewal import RenewalDecision
 
 def make_manager(tmp_path, **overrides) -> CertificateManager:
     config = LemattConfig(
-        config_base=str(tmp_path),
-        challenge_dir=str(tmp_path / "challenges"),
-        account_key=str(tmp_path / "account.key"),
+        config_base=tmp_path,
+        challenge_dir=tmp_path / "challenges",
+        account_key=tmp_path / "account.key",
         **overrides,
     )
     return CertificateManager(config)
