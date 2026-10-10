@@ -39,10 +39,11 @@ def _iso(moment: datetime.datetime | None) -> str | None:
     return None if moment is None else moment.replace(microsecond=0).isoformat() + "Z"
 
 
-def _parse(value: Any) -> datetime.datetime | None:
+def parse_timestamp(value: Any) -> datetime.datetime | None:
+    """Parse a stored ISO-8601 timestamp into naive UTC (None if empty)."""
     if not value:
         return None
-    parsed = datetime.datetime.fromisoformat(str(value).removesuffix("Z"))
+    parsed = datetime.datetime.fromisoformat(str(value))
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(datetime.UTC).replace(tzinfo=None)
     return parsed
@@ -154,7 +155,7 @@ def _decode(data: dict[str, Any], cls: type) -> dict[str, Any]:
     decoded = {k: v for k, v in data.items() if k in known}
     for name in _DATETIME_FIELDS[cls]:
         if name in decoded:
-            decoded[name] = _parse(decoded[name])
+            decoded[name] = parse_timestamp(decoded[name])
     return decoded
 
 
@@ -225,7 +226,7 @@ class StateStore:
             directory_url=directory_url,
             key_thumbprint=key_thumbprint,
             account_url=data["account_url"],
-            registered_at=_parse(data.get("registered_at")),
+            registered_at=parse_timestamp(data.get("registered_at")),
         )
 
     def save_account(self, account: AccountState) -> None:

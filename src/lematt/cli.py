@@ -36,7 +36,7 @@ from lematt.notifications import (
     NotificationManager,
     run_notifications,
 )
-from lematt.state import RunLockedError, StateStore, utcnow
+from lematt.state import RunLockedError, StateStore, parse_timestamp, utcnow
 
 # Exit code when another renewal run holds the lock (EX_TEMPFAIL)
 EXIT_RUN_LOCKED = 75
@@ -929,7 +929,7 @@ def send_run_notifications(ctx: Context, *, since: datetime.datetime) -> None:
     history = [
         entry
         for entry in store.history()
-        if datetime.datetime.fromisoformat(str(entry["at"]).removesuffix("Z")) >= since
+        if (at := parse_timestamp(entry.get("at"))) and at >= since
     ]
     for event in run_notifications(history):
         manager.notify(event)

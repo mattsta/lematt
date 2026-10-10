@@ -32,7 +32,7 @@ class RenewalInfo:
 
 
 def _timestamp(value: Any) -> datetime.datetime:
-    moment = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    moment = datetime.datetime.fromisoformat(str(value))
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=datetime.UTC)
     return moment.astimezone(datetime.UTC).replace(tzinfo=None)
