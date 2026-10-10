@@ -19,7 +19,14 @@ from lematt.tui.screens import (
     CertificateDetailScreen,
     DashboardScreen,
 )
-from lematt.tui.widgets import CertificateTable, HealthTable, LogViewer, OverviewPanel
+from lematt.tui.widgets import (
+    CertificateTable,
+    DashboardHeader,
+    HealthTable,
+    LogViewer,
+    OverviewPanel,
+    StatusSidebar,
+)
 
 
 @dataclass
@@ -130,39 +137,25 @@ class LemattDashboardApp(App[None]):
         Args:
             health: The new health data.
         """
-        if not health or not self.is_mounted:
-            return
-
-        # Check if we're on the dashboard screen
-        if not isinstance(self.screen, DashboardScreen):
+        screen = self._dashboard_screen()
+        if not health or screen is None:
             return
 
         try:
-            # Update header
-            header = self.screen.query_one("#header")
+            header = screen.query_one("#header", DashboardHeader)
             header.last_update = self.last_update
             header.error_message = self.error_message
             header.is_test = self.health_checker.config.is_test
 
-            # Update sidebar
-            sidebar = self.screen.query_one("#sidebar")
+            sidebar = screen.query_one("#sidebar", StatusSidebar)
             sidebar.health_data = health
             sidebar.refresh_interval = self.config.refresh_interval
 
-            # Update overview panel
-            overview = self.screen.query_one(OverviewPanel)
-            overview.health_data = health
-
-            # Update certificate table
-            cert_table = self.screen.query_one(CertificateTable)
-            cert_table.certificates = health.certificates
-
-            # Update health table
-            health_table = self.screen.query_one(HealthTable)
-            health_table.certificates = health.certificates
-
-        except Exception as e:
-            logger.error(f"Error updating widgets: {e}", exc_info=True)
+            screen.query_one(OverviewPanel).health_data = health
+            screen.query_one(CertificateTable).certificates = health.certificates
+            screen.query_one(HealthTable).certificates = health.certificates
+        except Exception:
+            logger.exception("Error updating dashboard widgets")
 
     def watch_is_paused(self, paused: bool) -> None:
         """Update UI when pause state changes.
@@ -170,22 +163,17 @@ class LemattDashboardApp(App[None]):
         Args:
             paused: Whether the dashboard is paused.
         """
-        if not self.is_mounted:
+        screen = self._dashboard_screen()
+        if screen is None:
             return
+        screen.query_one("#header", DashboardHeader).is_paused = paused
+        self._add_log(f"Auto-refresh {'paused' if paused else 'resumed'}")
 
-        # Check if we're on the dashboard screen
-        if not isinstance(self.screen, DashboardScreen):
-            return
-
-        try:
-            header = self.screen.query_one("#header")
-            header.is_paused = paused
-
-            # Add log entry
-            status = "paused" if paused else "resumed"
-            self._add_log(f"Auto-refresh {status}")
-        except Exception:
-            pass
+    def _dashboard_screen(self) -> DashboardScreen | None:
+        """The dashboard screen, if it is mounted and active."""
+        if not self.screen_stack or not isinstance(self.screen, DashboardScreen):
+            return None
+        return self.screen
 
     async def _refresh_data(self) -> None:
         """Refresh certificate health data asynchronously.

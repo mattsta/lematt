@@ -117,17 +117,6 @@ CertificateDetailScreen {
     background: #000000;
 }
 
-/* Filter Dialog - Modal */
-FilterDialogScreen {
-    align: center middle;
-}
-
-#filter-container {
-    background: #1a1a1a;
-    color: #ffffff;
-    border: thick #444444;
-}
-
 /* Buttons */
 Button {
     margin: 0 1;

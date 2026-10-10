@@ -33,15 +33,6 @@ from lematt.crypto import (
     generate_private_key,
     get_certificate_info,
 )
-from lematt.dashboard import (
-    Dashboard,
-    DashboardConfig,
-    DashboardState,
-    DashboardView,
-    LemattDashboardApp,
-    create_simple_dashboard,
-    print_dashboard_snapshot,
-)
 
 # UI/Display components
 from lematt.display import (
@@ -107,6 +98,7 @@ from lematt.systemd import (
     SystemdConfig,
     SystemdInstaller,
 )
+from lematt.tui.app import DashboardConfig, LemattDashboardApp
 
 __all__ = [
     # Crypto
@@ -127,10 +119,7 @@ __all__ = [
     # Config loader
     "ConfigLoader",
     # Dashboard
-    "Dashboard",
     "DashboardConfig",
-    "DashboardState",
-    "DashboardView",
     "DisplayConfig",
     "DomainActions",
     "DomainConfig",
@@ -177,7 +166,6 @@ __all__ = [
     "create_example_toml",
     "create_health_summary",
     "create_renewal_progress",
-    "create_simple_dashboard",
     "generate_full_report",
     "generate_private_key",
     "generate_quick_report",
@@ -186,7 +174,6 @@ __all__ = [
     # Logging
     "logger",
     "print_banner",
-    "print_dashboard_snapshot",
     "print_error",
     "print_help",
     "print_info",

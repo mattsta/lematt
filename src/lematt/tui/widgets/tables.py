@@ -9,7 +9,14 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import DataTable
 
-from lematt.health import CertificateHealth
+from lematt.health import CertificateHealth, HealthStatus
+
+STATUS_ICONS = {
+    HealthStatus.HEALTHY: "✓",
+    HealthStatus.WARNING: "⚠",
+    HealthStatus.CRITICAL: "✗",
+    HealthStatus.UNKNOWN: "?",
+}
 
 
 class CertificateTable(Container):
@@ -142,14 +149,7 @@ class CertificateTable(Container):
 
         # Add rows
         for cert in filtered_certs:
-            # Status icon and text
-            status_icons = {
-                "HEALTHY": "✓",
-                "WARNING": "⚠",
-                "CRITICAL": "✗",
-                "UNKNOWN": "?",
-            }
-            icon = status_icons.get(cert.status, "?")
+            icon = STATUS_ICONS.get(cert.status, "?")
             status_text = f"{icon} {cert.status}"
 
             # Days styling
@@ -280,13 +280,7 @@ class HealthTable(DataTable):
 
         for cert in self.certificates:
             # Status with icon
-            status_icons = {
-                "HEALTHY": "✓",
-                "WARNING": "⚠",
-                "CRITICAL": "✗",
-                "UNKNOWN": "?",
-            }
-            icon = status_icons.get(cert.status, "?")
+            icon = STATUS_ICONS.get(cert.status, "?")
             status_text = f"{icon} {cert.status}"
 
             # Days

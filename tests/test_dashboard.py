@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from textual.widgets import DataTable
 
 from lematt.config import DomainConfig, LemattConfig
 from lematt.health import HealthChecker
@@ -36,6 +37,8 @@ async def test_dashboard_loads_switches_views_and_quits(tmp_path):
         assert app.health_data is not None
         table = app.screen.query_one(CertificateTable)
         assert len(table.certificates) == 4
+        rows = table.query_one("#cert-table", DataTable)
+        assert str(rows.get_row_at(0)[0]) == "✗ critical"  # missing file
 
         for key in ("2", "3", "4", "1", "p", "p", "r"):
             await pilot.press(key)

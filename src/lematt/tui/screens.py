@@ -7,9 +7,9 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.screen import Screen
-from textual.widgets import Button, RadioButton, RadioSet, Static
+from textual.widgets import Static
 
 from lematt.health import CertificateHealth
 from lematt.tui.widgets import (
@@ -306,112 +306,3 @@ class CertificateDetailScreen(Screen):
         except Exception:
             # Would show error notification here
             pass
-
-
-class FilterDialogScreen(Screen):
-    """Modal dialog for configuring certificate filters.
-
-    Allows filtering by:
-    - Status (all/healthy/warning/critical)
-    """
-
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "dismiss", "Cancel", show=True),
-    ]
-
-    DEFAULT_CSS = """
-    FilterDialogScreen {
-        align: center middle;
-    }
-
-    #filter-container {
-        width: 60;
-        height: auto;
-        background: $panel;
-        border: thick $primary;
-        padding: 1 2;
-    }
-
-    #filter-content {
-        height: auto;
-    }
-
-    #button-row {
-        layout: horizontal;
-        height: auto;
-        align: center middle;
-        padding-top: 1;
-    }
-
-    Button {
-        margin: 0 1;
-    }
-
-    RadioSet {
-        padding: 1 0;
-    }
-    """
-
-    def __init__(self, current_filter: str = "all", **kwargs: object) -> None:
-        """Initialize the filter dialog.
-
-        Args:
-            current_filter: The current filter setting.
-            **kwargs: Additional arguments passed to Screen.
-        """
-        super().__init__(**kwargs)
-        self.current_filter = current_filter
-        self.selected_filter = current_filter
-
-    def compose(self) -> ComposeResult:
-        """Compose the filter dialog layout."""
-        with Container(id="filter-container"):
-            with Vertical(id="filter-content"):
-                yield Static("Filter Certificates By Status:", style="bold")
-                with RadioSet(id="filter-radio"):
-                    yield RadioButton(
-                        "All Certificates", value=(self.current_filter == "all")
-                    )
-                    yield RadioButton(
-                        "Healthy Only", value=(self.current_filter == "healthy")
-                    )
-                    yield RadioButton(
-                        "Warning Only", value=(self.current_filter == "warning")
-                    )
-                    yield RadioButton(
-                        "Critical Only", value=(self.current_filter == "critical")
-                    )
-
-            with Horizontal(id="button-row"):
-                yield Button("Apply", id="apply-btn", variant="primary")
-                yield Button("Cancel", id="cancel-btn")
-
-    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
-        """Handle radio button selection.
-
-        Args:
-            event: The radio set changed event.
-        """
-        # Map radio index to filter value
-        filters = ["all", "healthy", "warning", "critical"]
-        if event.pressed and event.pressed.parent:
-            try:
-                index = list(event.pressed.parent.children).index(event.pressed)
-                self.selected_filter = filters[index]
-            except ValueError, IndexError:
-                pass
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button presses.
-
-        Args:
-            event: The button pressed event.
-        """
-        if event.button.id == "apply-btn":
-            self.dismiss(self.selected_filter)
-        elif event.button.id == "cancel-btn":
-            self.dismiss()
-
-    def action_dismiss(self) -> None:
-        """Cancel and close the dialog."""
-        self.dismiss()
