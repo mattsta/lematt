@@ -42,7 +42,6 @@ SUPPORTED_CURVES = ("prime256v1", "secp256r1", "secp384r1")
 RESERVED_ACTION_SECTIONS = ("default", "every")
 
 INI_DEFAULTS = {
-    "reauthorizeDays": "15",
     "keyBitsRSA": "2048",
     "alwaysGenerateNewKeys": "no",
     "generateNewCertsAfterDays": "0",
@@ -332,7 +331,11 @@ class ConfigLoader:
             "config": {
                 "challenge_dir": config.get("challengeDropDir", ""),
                 "account_key": config.get("accountKey", ""),
-                "reauthorize_days": number("reauthorizeDays", float),
+                "reauthorize_days": (
+                    number("reauthorizeDays", float)
+                    if "reauthorizeDays" in config
+                    else None
+                ),
                 "generate_new_certs_after_days": number(
                     "generateNewCertsAfterDays", float
                 ),
@@ -391,13 +394,9 @@ class ConfigLoader:
                 f"EC curve '{curve}' is not accepted by Let's Encrypt: {list(SUPPORTED_CURVES)}"
             )
 
-        days = config.get("reauthorize_days", 15.0)
-        if days < 1:
+        days = config.get("reauthorize_days")
+        if days is not None and days < 1:
             warnings.append(f"reauthorizeDays={days} is very aggressive.")
-        elif days > 89:
-            warnings.append(
-                f"reauthorizeDays={days} exceeds LE cert lifetime (90 days)."
-            )
 
         if not (self._format == "toml" and "domains" in self._config_data):
             domains_file = self.config_base / "domains"
@@ -429,7 +428,7 @@ class ConfigLoader:
             config_base=str(self.config_base),
             challenge_dir=config.get("challenge_dir", ""),
             account_key=config.get("account_key", ""),
-            reauthorize_days=config.get("reauthorize_days", 15.0),
+            reauthorize_days=config.get("reauthorize_days"),
             generate_new_certs_after_days=config.get(
                 "generate_new_certs_after_days", 0.0
             ),
@@ -478,8 +477,10 @@ challenge_dir = "/var/www/html/.well-known/acme-challenge"
 # Account key for Let's Encrypt (create with: openssl genrsa 4096 > account.key)
 account_key = "/etc/lematt/account.key"
 
-# Renew certificates this many days before expiration (default: 15)
-reauthorize_days = 15
+# Renewal timing follows the CA (ARI renewal windows, else 1/3 of the
+# certificate lifetime remaining). Optionally renew earlier, this many days
+# before expiry:
+# reauthorize_days = 30
 
 # RSA key size (2048, 3072, or 4096)
 key_bits_rsa = 2048

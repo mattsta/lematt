@@ -17,6 +17,7 @@ from lematt.config import (
 from lematt.executor import _worker_init
 from lematt.log import setup_logging
 from lematt.manager import CertificateManager, PrepareActionRunner
+from lematt.renewal import RenewalDecision
 
 
 def make_manager(tmp_path, **overrides) -> CertificateManager:
@@ -118,7 +119,8 @@ def test_prepare_skipped_when_nothing_due(tmp_path, monkeypatch):
     manager = make_manager(tmp_path, is_cron=True)
     prepared = record_prepares(monkeypatch)
     monkeypatch.setattr(
-        CertificateManager, "cert_needs_renewal", lambda self, cert, now: False
+        "lematt.manager.decide",
+        lambda *a, **k: RenewalDecision(False, "lifetime", "not due"),
     )
 
     results = manager.process_domain_all_keys(
@@ -133,7 +135,8 @@ def test_prepare_runs_once_when_due(tmp_path, monkeypatch):
     manager = make_manager(tmp_path, is_dry_run=True)
     prepared = record_prepares(monkeypatch)
     monkeypatch.setattr(
-        CertificateManager, "cert_needs_renewal", lambda self, cert, now: True
+        "lematt.manager.decide",
+        lambda *a, **k: RenewalDecision(True, "lifetime", "due"),
     )
 
     manager.process_domain_all_keys(DomainConfig("mail.example.com"), DomainActions())

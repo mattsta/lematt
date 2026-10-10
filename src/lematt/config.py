@@ -180,6 +180,14 @@ class DomainActions:
         return result
 
 
+@dataclass(frozen=True)
+class RenewalSettings:
+    """Operator overrides that can move renewal earlier (see lematt.renewal)."""
+
+    reauthorize_days: float | None = None
+    generate_new_certs_after_days: float = 0.0
+
+
 @dataclass
 class LemattConfig:
     """Global configuration for lematt."""
@@ -190,7 +198,7 @@ class LemattConfig:
     account_key: str
 
     # Certificate settings
-    reauthorize_days: float = 15.0
+    reauthorize_days: float | None = None  # None: follow the CA's guidance
     generate_new_certs_after_days: float = 0.0
     always_generate_new_keys: bool = False
 
@@ -225,13 +233,12 @@ class LemattConfig:
         return self.staging_url if self.is_test else self.production_url
 
     @property
-    def reauthorize_timedelta(self) -> timedelta:
-        """Get the reauthorization window as a timedelta."""
-        if self.generate_new_certs_after_days > 0:
-            return timedelta(days=90) - timedelta(
-                days=self.generate_new_certs_after_days
-            )
-        return timedelta(days=self.reauthorize_days)
+    def renewal_settings(self) -> RenewalSettings:
+        """Operator overrides for the renewal policy."""
+        return RenewalSettings(
+            reauthorize_days=self.reauthorize_days,
+            generate_new_certs_after_days=self.generate_new_certs_after_days,
+        )
 
     def get_subdir(self, subdir: str) -> str:
         """Get the appropriate subdirectory based on test/prod mode."""

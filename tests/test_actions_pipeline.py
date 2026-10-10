@@ -103,7 +103,7 @@ def test_prepare_runs_once_and_stays_alive_during_issuance(setup, monkeypatch):
     def fake_request(self, csr, output_path, **kwargs):
         alive_during_request.append(all(map(_alive, _wait_for_pids(pids))))
         open(output_path, "w").close()
-        return True
+        return None  # success
 
     monkeypatch.setattr(CertificateManager, "request_certificate", fake_request)
     manager = CertificateManager(config)

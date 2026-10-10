@@ -12,13 +12,14 @@ from cryptography.hazmat.primitives.serialization import (
     NoEncryption,
     PrivateFormat,
 )
-from fake_acme import DIRECTORY_URL, FakeAcmeServer
+from fake_acme import DIRECTORY_URL, FakeAcmeServer, ari_id
 
 import lematt.manager
 from lematt.acme import AccountKey, AcmeTransport, Http01Solver, ServerError
 from lematt.acme import issue_certificate as real_issue_certificate
 from lematt.acme.errors import ChallengeError
 from lematt.cli import main
+from lematt.state import StateStore
 
 
 @pytest.fixture
@@ -134,3 +135,50 @@ def test_transient_failures_are_retried_after_retry_after(monkeypatch, setup):
     # RSA: transient failure, wait 5s, then a permanent failure; EC: one try
     assert len(attempts) == 3
     assert waits == [5]
+
+
+def test_state_and_history_track_issuance(monkeypatch, setup, capsys):
+    base, server, _ = setup
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+
+    store = StateStore(base / "test" / "state")
+    state = store.load_cert("mail.example.org.prime256v1")
+    leaf = server.issued[-1]
+    assert state.issued.serial == f"{leaf.serial_number:x}"
+    assert state.issued.ari_id == ari_id(leaf)
+    assert state.attempts.consecutive_failures == 0
+    assert [e["event"] for e in store.history()] == ["issued", "issued"]
+
+    assert (
+        run(monkeypatch, base, "--status", "--json", "--domain", "mail.example.org")
+        == 0
+    )
+    renewal = json.loads(capsys.readouterr().out)["certificates"][0]["renewal"]
+    assert renewal["renew_now"] is False
+    assert renewal["basis"] == "lifetime"  # ARI not consulted yet
+    assert renewal["last_success"] is not None
+
+
+def test_failures_back_off_until_forced(monkeypatch, setup):
+    base, server, _ = setup
+    server.reject_validation = True
+
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 1
+    store = StateStore(base / "test" / "state")
+    state = store.load_cert("mail.example.org.rsa2048")
+    assert state.attempts.consecutive_failures == 1
+    assert "unauthorized" in state.attempts.last_error
+    assert store.history()[-1]["event"] == "renewal_failed"
+
+    # The next run (within the backoff window) doesn't contact the CA
+    challenges = server.count("POST", "/challenge")
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    assert server.count("POST", "/challenge") == challenges
+
+    # An operator can retry right away
+    server.reject_validation = False
+    assert run(monkeypatch, base, "--domain", "mail.example.org", "--force-renew") == 0
+    assert (
+        store.load_cert("mail.example.org.rsa2048").attempts.consecutive_failures == 0
+    )

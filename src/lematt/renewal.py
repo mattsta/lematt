@@ -24,7 +24,7 @@ so they agree about what will happen and why.
 import datetime
 from dataclasses import dataclass, field
 
-from lematt.config import CertificateInfo
+from lematt.config import CertificateInfo, RenewalSettings
 from lematt.state import CertState
 
 DAY = datetime.timedelta(days=1)
@@ -41,14 +41,6 @@ FAILURE_BACKOFF = (
     datetime.timedelta(minutes=100),
     datetime.timedelta(days=1),
 )
-
-
-@dataclass(frozen=True)
-class RenewalSettings:
-    """Operator overrides that can move renewal earlier."""
-
-    reauthorize_days: float | None = None
-    generate_new_certs_after_days: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -121,14 +113,14 @@ def decide(
     force: bool = False,
 ) -> RenewalDecision:
     """Decide whether ``info``'s certificate should be renewed at ``now``."""
-    if not info.exists:
-        return RenewalDecision(True, "missing", "no certificate yet")
-    if info.parse_error or info.not_after is None or info.not_before is None:
-        return RenewalDecision(
-            True, "unreadable", f"certificate unreadable: {info.parse_error}"
-        )
     if force:
         return RenewalDecision(True, "forced", "renewal forced (--force-renew)")
+    if not info.exists:
+        return _unless_backing_off(state, now, "missing", "no certificate yet")
+    if info.parse_error or info.not_after is None or info.not_before is None:
+        return _unless_backing_off(
+            state, now, "unreadable", f"certificate unreadable: {info.parse_error}"
+        )
 
     due, basis = recommended_due(info, state)
     notes: list[str] = []
@@ -150,8 +142,7 @@ def decide(
         elif info.not_after - days_left < due:
             due, basis = info.not_after - days_left, "reauthorizeDays"
 
-    expired = info.not_after <= now
-    if due > now and not expired:
+    if due > now and info.not_after > now:
         return RenewalDecision(
             False,
             basis,
@@ -160,19 +151,34 @@ def decide(
             notes=tuple(notes),
         )
 
+    if info.not_after <= now:
+        reason = f"expired {_when(info.not_after)}"
+    else:
+        reason = f"due since {_when(due)} ({basis})"
+    return _unless_backing_off(
+        state, now, basis, reason, due_at=due, notes=tuple(notes)
+    )
+
+
+def _unless_backing_off(
+    state: CertState | None,
+    now: datetime.datetime,
+    basis: str,
+    reason: str,
+    *,
+    due_at: datetime.datetime | None = None,
+    notes: tuple[str, ...] = (),
+) -> RenewalDecision:
+    """Renew now, unless an earlier failure's backoff is still running."""
     attempts = state.attempts if state else None
     if attempts and attempts.next_attempt_after and now < attempts.next_attempt_after:
         return RenewalDecision(
             False,
             basis,
-            f"{'expired' if expired else 'due'} since "
-            f"{_when(info.not_after if expired else due)}, but backing off after "
-            f"{attempts.consecutive_failures} failure(s) until "
-            f"{_when(attempts.next_attempt_after)}",
-            due_at=due,
+            f"{reason}, but backing off after {attempts.consecutive_failures} "
+            f"failure(s) until {_when(attempts.next_attempt_after)}",
+            due_at=due_at,
             blocked_until=attempts.next_attempt_after,
-            notes=tuple(notes),
+            notes=notes,
         )
-
-    reason = "certificate expired" if expired else f"due since {_when(due)} ({basis})"
-    return RenewalDecision(True, basis, reason, due_at=due, notes=tuple(notes))
+    return RenewalDecision(True, basis, reason, due_at=due_at, notes=notes)

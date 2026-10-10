@@ -13,7 +13,6 @@ import tempfile
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -21,6 +20,7 @@ from loguru import logger
 from lematt.acme import AcmeError, issue_certificate
 from lematt.config import (
     ActionConfig,
+    CertificateInfo,
     CertificateResult,
     DomainActions,
     DomainConfig,
@@ -34,9 +34,30 @@ from lematt.crypto import (
     write_file_atomically,
 )
 from lematt.log import EVENT
+from lematt.renewal import RenewalDecision, backoff_until, decide
+from lematt.state import AttemptState, CertState, IssuedState, StateStore, utcnow
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+@dataclass
+class RenewalPlan:
+    """A certificate, what lematt remembers about it, and the decision."""
+
+    key_type: KeyType
+    info: CertificateInfo
+    state: CertState
+    decision: RenewalDecision
+
+
+@dataclass(frozen=True)
+class RequestFailure:
+    """Why a certificate request failed (and how long the CA asked to wait)."""
+
+    message: str
+    retry_after: float | None = None
+
 
 # Upper bound on waiting before retrying a transient ACME failure
 MAX_RETRY_WAIT = 60.0
@@ -249,27 +270,58 @@ class CertificateManager:
             f"{name}-{subtype}.{tag}{test_suffix}.{ext}"
         )
 
-    def cert_needs_renewal(
+    @property
+    def store(self) -> StateStore:
+        """Persistent state for this mode (read-only during dry runs)."""
+        return StateStore(
+            pathlib.Path(self.config.state_dir), read_only=self.config.is_dry_run
+        )
+
+    def load_state(
+        self, domain_config: DomainConfig, key_type: KeyType, info: CertificateInfo
+    ) -> CertState:
+        """Saved state for a certificate, reconciled with the file on disk.
+
+        A certificate lematt didn't issue (or issued before it kept state)
+        is adopted so status and monitoring can describe it.
+        """
+        cert_id = self.config.cert_id(domain_config, key_type)
+        state = self.store.load_cert(cert_id) or CertState(cert_id)
+        state.names = domain_config.all_domains
+        state.key_type = str(key_type)
+        if (
+            info.serial_hex
+            and info.not_before
+            and info.not_after
+            and (state.issued is None or state.issued.serial != info.serial_hex)
+        ):
+            state.issued = IssuedState(
+                serial=info.serial_hex,
+                ari_id=info.ari_id,
+                not_before=info.not_before,
+                not_after=info.not_after,
+            )
+            state.renewal_info = None
+        return state
+
+    def plan(
         self,
-        cert_path: str,
-        utcnow: datetime.datetime,
-    ) -> bool:
-        """Check if a certificate needs renewal based on expiration date."""
-        if not os.path.isfile(cert_path):
-            return True
-
-        cert_info = get_certificate_info(cert_path)
-        if not cert_info.exists or cert_info.parse_error:
-            return True
-
-        if cert_info.not_after is None:
-            return True
-
-        remaining = cert_info.not_after - utcnow
-        if remaining < timedelta(days=0):
-            return True  # Already expired
-
-        return remaining < self.config.reauthorize_timedelta
+        domain_config: DomainConfig,
+        key_type: KeyType,
+        now: datetime.datetime | None = None,
+    ) -> RenewalPlan:
+        """Load a certificate and its state and decide whether to renew it."""
+        now = now or utcnow()
+        info = get_certificate_info(self.config.get_cert_path(domain_config, key_type))
+        state = self.load_state(domain_config, key_type, info)
+        decision = decide(
+            info,
+            state,
+            now,
+            self.config.renewal_settings,
+            force=self.config.force_renew,
+        )
+        return RenewalPlan(key_type, info, state, decision)
 
     def request_certificate(
         self,
@@ -277,7 +329,7 @@ class CertificateManager:
         output_path: str,
         max_retries: int = 3,
         domain_context: str = "",
-    ) -> bool:
+    ) -> RequestFailure | None:
         """Request a signed certificate from the ACME server.
 
         Only transient failures (network errors, 5xx) are retried, waiting
@@ -292,7 +344,7 @@ class CertificateManager:
             domain_context: Domain context for logging (e.g., "example.com[rsa]").
 
         Returns:
-            True if successful, False otherwise.
+            None on success, otherwise what went wrong.
         """
         csr_pem = pathlib.Path(csr_path).read_bytes()
         for attempt in range(1, max_retries + 1):
@@ -305,11 +357,11 @@ class CertificateManager:
                     context=domain_context,
                 )
                 write_file_atomically(output_path, issued.pem.encode())
-                return True
+                return None
             except AcmeError as e:
                 if not e.retryable or attempt == max_retries:
                     self.log(f"Certificate request failed: {e}", "ERROR", update=True)
-                    return False
+                    return RequestFailure(str(e), e.retry_after)
                 wait = min(e.retry_after or 2**attempt, MAX_RETRY_WAIT)
                 self.log(
                     f"Certificate request failed (attempt {attempt}/{max_retries}): "
@@ -319,8 +371,55 @@ class CertificateManager:
                 time.sleep(wait)
             except (OSError, ValueError) as e:
                 self.log(f"Certificate request failed: {e}", "ERROR", update=True)
-                return False
-        return False
+                return RequestFailure(str(e))
+        return RequestFailure("certificate request failed")
+
+    def record_success(self, plan: RenewalPlan, cert_path: str) -> None:
+        """Remember a newly issued certificate and reset failure backoff."""
+        now = utcnow()
+        state, previous = plan.state, plan.state.issued
+        info = get_certificate_info(cert_path)
+        if info.serial_hex and info.not_before and info.not_after:
+            state.issued = IssuedState(
+                serial=info.serial_hex,
+                ari_id=info.ari_id,
+                not_before=info.not_before,
+                not_after=info.not_after,
+                issued_at=now,
+            )
+        else:
+            logger.warning(f"Issued certificate {cert_path} could not be read back")
+            state.issued = None
+        state.renewal_info = None
+        state.attempts = AttemptState(last_attempt=now, last_success=now)
+        self.store.save_cert(state)
+        self.store.record(
+            "issued",
+            state.cert_id,
+            serial=info.serial_hex,
+            not_after=info.not_after,
+            replaced=previous.serial if previous else None,
+            reason=plan.decision.reason,
+        )
+
+    def record_failure(self, plan: RenewalPlan, failure: RequestFailure) -> None:
+        """Remember a failed renewal and schedule the next allowed attempt."""
+        now = utcnow()
+        attempts = plan.state.attempts
+        attempts.last_attempt = attempts.last_failure = now
+        attempts.last_error = failure.message
+        attempts.consecutive_failures += 1
+        attempts.next_attempt_after = backoff_until(
+            attempts.consecutive_failures, now, failure.retry_after
+        )
+        self.store.save_cert(plan.state)
+        self.store.record(
+            "renewal_failed",
+            plan.state.cert_id,
+            error=failure.message,
+            consecutive_failures=attempts.consecutive_failures,
+            next_attempt_after=attempts.next_attempt_after,
+        )
 
     def generate_key(
         self,
@@ -410,44 +509,43 @@ class CertificateManager:
         domain_actions: DomainActions,
         key_types: list[KeyType] | None = None,
     ) -> list[CertificateResult]:
-        """Process a domain with ALL key types, running prepare ONCE.
+        """Renew whichever of a domain's certificates are due.
 
-        This prevents "port already in use" errors by running prepare scripts
-        once and keeping them alive for the entire domain processing.
+        Prepare actions (e.g. remote challenge forwarders) start only if
+        some key type is due, run once, and stay alive for every key type.
 
         Args:
             domain_config: The domain configuration.
             domain_actions: DomainActions container with action configs.
-            key_types: List of key types to process (defaults to [RSA, EC]).
+            key_types: Key types to process (defaults to [RSA, EC]).
 
         Returns:
-            List of CertificateResult for each key type processed.
+            One CertificateResult per key type.
         """
-        if key_types is None:
-            key_types = [KeyType.RSA, KeyType.EC]
+        now = utcnow()
+        plans = [self.plan(domain_config, kt, now) for kt in key_types or list(KeyType)]
+        for plan in plans:
+            for note in plan.decision.notes:
+                self.log(note, "WARN")
+            if not plan.decision.renew:
+                self.store.save_cert(plan.state)  # adopted/refreshed state
 
-        # Prepare actions (e.g. remote challenge forwarders) are only needed
-        # when a certificate will actually be requested
-        utcnow = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
-        if not self.config.force_renew and not any(
-            self.cert_needs_renewal(
-                self.config.get_cert_path(domain_config, key_type), utcnow
-            )
-            for key_type in key_types
-        ):
-            return [self.process_domain(domain_config, kt) for kt in key_types]
+        if not any(plan.decision.renew for plan in plans):
+            return [
+                self.process_domain(domain_config, p.key_type, plan=p) for p in plans
+            ]
 
-        # Run prepare actions ONCE and keep them alive for all key types
         prepare_runner = PrepareActionRunner(self.config)
         prepared_processes: list[subprocess.Popen] = []
-
         try:
             prepare_runner.lock_domains(domain_config.all_domains)
             for domain in domain_config.all_domains:
                 procs = prepare_runner.prepare_domain(domain, domain_actions)
                 prepared_processes.extend(procs)
 
-            return [self.process_domain(domain_config, kt) for kt in key_types]
+            return [
+                self.process_domain(domain_config, p.key_type, plan=p) for p in plans
+            ]
         finally:
             prepare_runner.cleanup(prepared_processes)
 
@@ -455,8 +553,10 @@ class CertificateManager:
         self,
         domain_config: DomainConfig,
         key_type: KeyType,
+        *,
+        plan: RenewalPlan | None = None,
     ) -> CertificateResult:
-        """Process a single domain for certificate renewal.
+        """Renew one certificate if its plan says so.
 
         Prepare actions are the caller's responsibility; see
         process_domain_all_keys().
@@ -464,190 +564,169 @@ class CertificateManager:
         Args:
             domain_config: The domain configuration.
             key_type: Type of key (RSA or EC).
+            plan: The renewal decision (computed now if not given).
 
         Returns:
             CertificateResult with the operation outcome.
         """
-        utcnow = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+        plan = plan or self.plan(domain_config, key_type)
+        decision = plan.decision
+        private_key = self.config.get_key_path(domain_config, key_type)
+        cert = self.config.get_cert_path(domain_config, key_type)
+        csr = self.config.get_csr_path(domain_config, key_type)
 
-        # Build file paths
-        filename_base = domain_config.filename_base
-        private_key = self.get_customized_name("key", filename_base, "key", key_type)
-        cert = self.get_customized_name(
-            "cert", filename_base, "cert-combined", key_type
+        def result(
+            success: bool, renewed: bool, error: str | None = None
+        ) -> CertificateResult:
+            return CertificateResult(
+                domain_config=domain_config,
+                key_type=key_type,
+                success=success,
+                renewed=renewed,
+                cert_path=cert if success else None,
+                key_path=private_key if success else None,
+                error_message=error,
+            )
+
+        if not decision.renew:
+            self.log(f"Not renewing {domain_config}: {decision.reason}", str(key_type))
+            return result(success=True, renewed=False)
+
+        self.log(
+            f"Renewing {domain_config}: {decision.reason}", str(key_type), update=True
         )
-        csr = self.get_customized_name("csr", filename_base, "csr", key_type, "csr")
 
-        self.log(f"Checking certificate for {domain_config}...", str(key_type))
-
-        # Check if renewal is needed
-        needs_renewal = self.cert_needs_renewal(cert, utcnow)
-        if self.config.force_renew:
-            self.log("Force renewal requested", str(key_type), update=True)
-            needs_renewal = True
-
-        if not needs_renewal:
-            self.log("Not renewing!", str(key_type))
-            return CertificateResult(
-                domain_config=domain_config,
-                key_type=key_type,
-                success=True,
-                renewed=False,
-                cert_path=cert,
-                key_path=private_key,
-            )
-
-        self.log(f"Renewing {domain_config}!", str(key_type), update=True)
-
-        # Dry-run mode
         if self.config.is_dry_run:
-            self.log(
-                f"[DRY-RUN] Would generate key: {private_key}",
-                str(key_type),
-                update=True,
-            )
-            self.log(f"[DRY-RUN] Would generate CSR: {csr}", str(key_type), update=True)
-            self.log(
-                f"[DRY-RUN] Would request certificate: {cert}",
-                str(key_type),
-                update=True,
-            )
-            return CertificateResult(
-                domain_config=domain_config,
-                key_type=key_type,
-                success=True,
-                renewed=True,
-                cert_path=cert,
-                key_path=private_key,
-            )
+            for action, path in (
+                ("generate key", private_key),
+                ("generate CSR", csr),
+                ("request certificate", cert),
+            ):
+                self.log(
+                    f"[DRY-RUN] Would {action}: {path}", str(key_type), update=True
+                )
+            return result(success=True, renewed=True)
 
-        # Generate key if needed
         needs_key = self.config.always_generate_new_keys or not os.path.isfile(
             private_key
         )
         if needs_key and not self.generate_key(private_key, key_type):
-            return CertificateResult(
-                domain_config=domain_config,
-                key_type=key_type,
-                success=False,
-                renewed=True,
-                error_message="Key generation failed",
-            )
+            return result(success=False, renewed=True, error="Key generation failed")
 
-        # Create key symlinks for SAN domains
         for domain in domain_config.san_domains:
-            single_domain_key = self.get_customized_name("key", domain, "key", key_type)
             self.create_atomic_symlink(
                 os.path.basename(private_key),
-                single_domain_key,
+                self.get_customized_name("key", domain, "key", key_type),
                 key_type,
             )
 
-        # Generate CSR if needed
         needs_csr = self.config.always_generate_new_keys or not os.path.isfile(csr)
         if needs_csr and not self.generate_csr(
             private_key, domain_config.all_domains, csr
         ):
-            return CertificateResult(
-                domain_config=domain_config,
-                key_type=key_type,
-                success=False,
-                renewed=True,
-                error_message="CSR generation failed",
-            )
+            return result(success=False, renewed=True, error="CSR generation failed")
 
-        cert_success = self.request_certificate(
+        failure = self.request_certificate(
             csr, cert, domain_context=f"{domain_config.primary_domain}[{key_type}]"
         )
-        if not cert_success:
+        if failure is not None:
+            self.record_failure(plan, failure)
             self.log(
-                f"Skipping symlinks for {domain_config} due to cert failure",
+                f"Next attempt after {plan.state.attempts.next_attempt_after} UTC",
                 str(key_type),
                 update=True,
             )
-            return CertificateResult(
-                domain_config=domain_config,
-                key_type=key_type,
-                success=False,
-                renewed=True,
-                error_message="Certificate request failed",
+            return result(
+                success=False, renewed=True, error="Certificate request failed"
             )
 
-        # Create cert symlinks for SAN domains
         for domain in domain_config.san_domains:
-            single_domain_cert = self.get_customized_name(
-                "cert", domain, "cert-combined", key_type
-            )
             self.create_atomic_symlink(
                 os.path.basename(cert),
-                single_domain_cert,
+                self.get_customized_name("cert", domain, "cert-combined", key_type),
                 key_type,
             )
-
-        self.log("")  # Visual break
-        return CertificateResult(
-            domain_config=domain_config,
-            key_type=key_type,
-            success=True,
-            renewed=True,
-            cert_path=cert,
-            key_path=private_key,
-        )
+        self.record_success(plan, cert)
+        return result(success=True, renewed=True)
 
     def get_status_data(self, domains: Sequence[DomainConfig]) -> list[dict]:
-        """Get certificate status as structured data.
+        """Certificate status, including the renewal decision, as plain data.
 
-        Args:
-            domains: List of domain configurations.
-
-        Returns:
-            List of status dictionaries for each certificate.
+        ``status`` is one of: ok, renew_soon (renewal is due or backing
+        off), critical (less than a tenth of the lifetime left), expired,
+        missing, parse_error, unknown.
         """
+        now = utcnow()
         results: list[dict] = []
-
         for domain_config in domains:
-            for key_type in [KeyType.RSA, KeyType.EC]:
-                cert_path = self.config.get_cert_path(domain_config, key_type)
-                cert_info = get_certificate_info(cert_path)
-
+            for key_type in KeyType:
+                plan = self.plan(domain_config, key_type, now)
+                info, decision = plan.info, plan.decision
                 entry: dict = {
                     "domain": domain_config.primary_domain,
                     "san_domains": domain_config.san_domains,
                     "key_type": key_type.name.lower(),
-                    "cert_path": cert_path,
-                    "exists": cert_info.exists,
+                    "cert_path": info.path,
+                    "exists": info.exists,
+                    "expires": info.not_after.isoformat() if info.not_after else None,
+                    "days_until_expiry": info.days_until_expiry,
+                    "status": self._status(info, decision, now),
+                    "renewal": self._renewal_status(plan),
                 }
-
-                if not cert_info.exists:
-                    entry["status"] = "missing"
-                    entry["expires"] = None
-                    entry["days_until_expiry"] = None
-                elif cert_info.parse_error:
-                    entry["status"] = "parse_error"
-                    entry["parse_error"] = cert_info.parse_error
-                    entry["expires"] = None
-                    entry["days_until_expiry"] = None
-                elif cert_info.not_after:
-                    days = cert_info.days_until_expiry
-                    entry["expires"] = cert_info.not_after.isoformat()
-                    entry["days_until_expiry"] = days
-
-                    if cert_info.is_expired:
-                        entry["status"] = "expired"
-                    elif days is not None and days < 7:
-                        entry["status"] = "critical"
-                    elif days is not None and days < 30:
-                        entry["status"] = "renew_soon"
-                    else:
-                        entry["status"] = "ok"
-                else:
-                    entry["status"] = "unknown"
-                    entry["expires"] = None
-                    entry["days_until_expiry"] = None
-
+                if info.parse_error:
+                    entry["parse_error"] = info.parse_error
                 results.append(entry)
-
         return results
+
+    @staticmethod
+    def _status(
+        info: CertificateInfo, decision: RenewalDecision, now: datetime.datetime
+    ) -> str:
+        if not info.exists:
+            return "missing"
+        if info.parse_error:
+            return "parse_error"
+        if info.not_after is None or info.lifetime is None:
+            return "unknown"
+        if info.not_after <= now:
+            return "expired"
+        if info.not_after - now < info.lifetime / 10:
+            return "critical"
+        if decision.renew or decision.blocked_until:
+            return "renew_soon"
+        return "ok"
+
+    @staticmethod
+    def _renewal_status(plan: RenewalPlan) -> dict:
+        def iso(moment: datetime.datetime | None) -> str | None:
+            return moment.isoformat() if moment else None
+
+        decision, state = plan.decision, plan.state
+        attempts = state.attempts
+        ari = state.renewal_info
+        current_ari = (
+            ari is not None
+            and state.issued is not None
+            and (ari.serial == state.issued.serial)
+        )
+        return {
+            "renew_now": decision.renew,
+            "due_at": iso(decision.due_at),
+            "basis": decision.basis,
+            "reason": decision.reason,
+            "blocked_until": iso(decision.blocked_until),
+            "ari_window": {
+                "start": iso(ari.window_start),
+                "end": iso(ari.window_end),
+                "explanation_url": ari.explanation_url,
+            }
+            if ari is not None and current_ari
+            else None,
+            "last_success": iso(attempts.last_success),
+            "last_failure": iso(attempts.last_failure),
+            "last_error": attempts.last_error,
+            "consecutive_failures": attempts.consecutive_failures,
+        }
 
     def show_status(
         self, domains: Sequence[DomainConfig], json_output: bool = False
@@ -681,11 +760,13 @@ class CertificateManager:
             }
 
         # Human-readable output
-        logger.info("=" * 80)
+        logger.info("=" * 100)
         logger.info("CERTIFICATE STATUS REPORT")
-        logger.info("=" * 80)
-        logger.info(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
-        logger.info("-" * 80)
+        logger.info("=" * 100)
+        logger.info(
+            f"{'Domain':<40} {'Expires':<12} {'Days Left':<10} {'Renews':<17} {'Status'}"
+        )
+        logger.info("-" * 100)
 
         status_icons = {
             "ok": "✅ OK",
@@ -706,9 +787,18 @@ class CertificateManager:
                 else "N/A"
             )
             status = status_icons.get(entry["status"], "❓ UNKNOWN")
+            renewal = entry["renewal"]
+            if renewal["renew_now"]:
+                renews = "now"
+            elif renewal["blocked_until"]:
+                renews = f"retry {renewal['blocked_until'][:10]}"
+            elif renewal["due_at"]:
+                renews = f"{renewal['due_at'][:10]} ({renewal['basis'][:5]})"
+            else:
+                renews = "N/A"
             logger.info(
-                f"{domain_with_type:<40} {expires_str:<20} {days_left:<12} {status}"
+                f"{domain_with_type:<40} {expires_str:<12} {days_left:<10} {renews:<17} {status}"
             )
 
-        logger.info("=" * 80)
+        logger.info("=" * 100)
         return None

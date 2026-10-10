@@ -125,7 +125,7 @@ def test_missing_unreadable_and_forced_renew_immediately():
 
 def test_expired_certificates_renew_unless_backing_off():
     expired_now = ISSUED + 91 * DAY
-    assert decide(cert(90), None, expired_now).reason == "certificate expired"
+    assert decide(cert(90), None, expired_now).reason == "expired 2026-12-30 00:00 UTC"
 
     state = CertState(
         cert_id="c",
@@ -135,7 +135,7 @@ def test_expired_certificates_renew_unless_backing_off():
     )
     decision = decide(cert(90), state, expired_now)
     assert not decision.renew
-    assert decision.reason.startswith("expired since")
+    assert decision.reason.startswith("expired 2026-12-30 00:00 UTC, but backing off")
 
 
 @pytest.mark.parametrize(
@@ -150,3 +150,16 @@ def test_expired_certificates_renew_unless_backing_off():
 )
 def test_backoff_schedule(failures, retry_after, wait):
     assert backoff_until(failures, ISSUED, retry_after) == ISSUED + wait
+
+
+def test_backoff_also_applies_before_the_first_certificate():
+    # e.g. a typo'd name that fails validation every time
+    missing = CertificateInfo(exists=False, path="x")
+    state = CertState(
+        cert_id="c",
+        attempts=AttemptState(consecutive_failures=1, next_attempt_after=ISSUED + DAY),
+    )
+
+    assert not decide(missing, state, ISSUED).renew
+    assert decide(missing, state, ISSUED + 2 * DAY).renew
+    assert decide(missing, state, ISSUED, force=True).renew
