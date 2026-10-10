@@ -1,7 +1,9 @@
 """Cron mode contract: silent when nothing happens, reports when certs renew or fail."""
 
+import re
 from concurrent.futures import ProcessPoolExecutor
 
+import pytest
 from loguru import logger
 
 from lematt.actions import ActionRunner
@@ -154,3 +156,16 @@ def test_worker_process_events_reach_output(tmp_path, capfd):
         pool.submit(manager.log, "Renewing example.com!", "rsa2048", True).result()
 
     assert "Renewing example.com!" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize("cron", [False, True])
+def test_test_mode_tag_appears_once(tmp_path, capsys, cron):
+    setup_logging(cron=cron, test_mode=True)
+
+    make_manager(tmp_path, is_test=True).log(
+        "Renewing example.com!", "rsa", update=True
+    )
+
+    line = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().err).strip()
+    assert line.count("[TEST]") == 1
+    assert line.endswith("> [rsa] Renewing example.com!")

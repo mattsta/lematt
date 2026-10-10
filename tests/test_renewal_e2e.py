@@ -586,3 +586,15 @@ def test_revoke_requires_confirmation_and_a_domain(monkeypatch, setup):
         == 1
     )
     assert server.revoked == {}
+
+
+def test_status_table_shows_the_full_renewal_basis(monkeypatch, setup, capsys):
+    base, _, _ = setup
+    assert run(monkeypatch, base, "--domain", "mail.example.org") == 0
+    capsys.readouterr()
+
+    assert run(monkeypatch, base, "--status", "--domain", "mail.example.org") == 0
+
+    err = capsys.readouterr().err
+    assert "(lifetime)" in err
+    assert "(lifet)" not in err.replace("(lifetime)", "")

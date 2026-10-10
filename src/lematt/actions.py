@@ -49,7 +49,7 @@ class ActionRunner:
         if not message:
             return
 
-        prefix = "[TEST] " if self.config.is_test else "> "
+        prefix = "> "  # the log format adds [TEST] in test mode
         mode_str = f"[{mode}] " if mode else ""
         full_message = f"{prefix}{mode_str}{message}"
 

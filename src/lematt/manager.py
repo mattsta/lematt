@@ -273,7 +273,7 @@ class CertificateManager:
         if not message:
             return
 
-        prefix = "[TEST] " if self.config.is_test else "> "
+        prefix = "> "  # the log format adds [TEST] in test mode
         mode_str = f"[{mode}] " if mode else ""
         full_message = f"{prefix}{mode_str}{message}"
 
@@ -1031,6 +1031,17 @@ class CertificateManager:
             "consecutive_failures": attempts.consecutive_failures,
         }
 
+    @staticmethod
+    def _renews_label(renewal: dict) -> str:
+        """The "Renews" column: when renewal happens, and what decided it."""
+        if renewal["renew_now"]:
+            return f"now ({renewal['basis']})"
+        if renewal["blocked_until"]:
+            return f"retry {renewal['blocked_until'][:10]}"
+        if renewal["due_at"]:
+            return f"{renewal['due_at'][:10]} ({renewal['basis']})"
+        return "N/A"
+
     def show_status(
         self, domains: Sequence[DomainConfig], json_output: bool = False
     ) -> dict | None:
@@ -1065,9 +1076,16 @@ class CertificateManager:
         # Human-readable output
         logger.info("=" * 100)
         logger.info("CERTIFICATE STATUS REPORT")
+        renews_width = max(
+            [
+                len("Renews"),
+                *(len(self._renews_label(e["renewal"])) for e in status_data),
+            ]
+        )
         logger.info("=" * 100)
         logger.info(
-            f"{'Domain':<40} {'Expires':<12} {'Days Left':<10} {'Renews':<17} {'Status'}"
+            f"{'Domain':<40} {'Expires':<12} {'Days Left':<10} "
+            f"{'Renews':<{renews_width}} {'Status'}"
         )
         logger.info("-" * 100)
 
@@ -1091,17 +1109,10 @@ class CertificateManager:
                 else "N/A"
             )
             status = status_icons.get(entry["status"], "❓ UNKNOWN")
-            renewal = entry["renewal"]
-            if renewal["renew_now"]:
-                renews = "now"
-            elif renewal["blocked_until"]:
-                renews = f"retry {renewal['blocked_until'][:10]}"
-            elif renewal["due_at"]:
-                renews = f"{renewal['due_at'][:10]} ({renewal['basis'][:5]})"
-            else:
-                renews = "N/A"
+            renews = self._renews_label(entry["renewal"])
             logger.info(
-                f"{domain_with_type:<40} {expires_str:<12} {days_left:<10} {renews:<17} {status}"
+                f"{domain_with_type:<40} {expires_str:<12} {days_left:<10} "
+                f"{renews:<{renews_width}} {status}"
             )
 
         logger.info("=" * 100)

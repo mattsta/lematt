@@ -47,7 +47,8 @@ def setup_logging(
     # Build format string with timestamps
     if cron:
         # Simpler format for cron logs
-        fmt = "{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {message}"
+        tag = "[TEST] " if test_mode else ""
+        fmt = f"{{time:YYYY-MM-DD HH:mm:ss}} | {{level:<8}} | {tag}{{message}}"
     else:
         # Interactive format with timestamps and colors
         if test_mode:
