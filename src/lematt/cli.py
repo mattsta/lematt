@@ -36,6 +36,7 @@ from lematt.notifications import (
     NotificationManager,
     run_notifications,
 )
+from lematt.reports import REPORT_FORMATS
 from lematt.state import RunLockedError, StateStore, parse_timestamp, utcnow
 
 # Exit code when another renewal run holds the lock (EX_TEMPFAIL)
@@ -408,14 +409,15 @@ def build_parser() -> argparse.ArgumentParser:
         dest="report_output",
         type=Path,
         metavar="PATH",
-        help="Save report to file (auto-detects format from extension)",
+        help="Write the report to PATH instead of printing it",
     )
     ui_group.add_argument(
         "--report-format",
         dest="report_format",
-        choices=["console", "json", "markdown"],
-        default="console",
-        help="Report output format (default: console)",
+        choices=REPORT_FORMATS,
+        default=None,
+        help="Report format (default: from the --report-output extension: "
+        ".json, .md/.markdown, else console text)",
     )
     ui_group.add_argument(
         "--help-topic",
@@ -663,27 +665,19 @@ def cmd_report(ctx: Context) -> int:
     from lematt.reports import generate_full_report
 
     args = ctx.args
-    config = ctx.config
-    # The report reads these alongside the settings
-    config.domains = ctx.domains  # type: ignore[attr-defined]
-    config.key_types = [KeyType.RSA, KeyType.EC]  # type: ignore[attr-defined]
-    config.actions = ctx.actions  # type: ignore[attr-defined]
-
     health = HealthChecker(
-        config=config,
+        config=ctx.config,
         warning_days=args.warning_days,
         critical_days=args.critical_days,
     ).check_all_certificates(ctx.domains)
 
-    output_path = args.report_output
-    output_format = args.report_format
-    if output_path and output_path.suffix == ".json":
-        output_format = "json"
-    elif output_path and output_path.suffix in (".md", ".markdown"):
-        output_format = "markdown"
-
     generate_full_report(
-        config=config, health=health, output_path=output_path, format=output_format
+        config=ctx.config,
+        domains=ctx.domains,
+        actions=ctx.actions,
+        health=health,
+        output_path=args.report_output,
+        format=args.report_format,
     )
     return 0
 

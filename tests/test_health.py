@@ -137,11 +137,9 @@ def test_report_schedule_uses_the_renewal_policy(config):
 
     write_cert(config, KeyType.RSA, lifetime_days=45, days_left=40)
     write_cert(config, KeyType.EC, lifetime_days=45, days_left=40)
-    config.domains = [DOMAIN]
-    config.key_types = list(KeyType)
     _, health = check(config)
 
-    schedule = ReportGenerator(config, health).build_renewal_schedule()
+    schedule = ReportGenerator(config, [DOMAIN], health).build_renewal_schedule()
 
     due = NOW + datetime.timedelta(days=40 - 15)  # 1/3 of 45 days before expiry
     assert {item.renewal_date for item in schedule} == {due}

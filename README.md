@@ -930,13 +930,18 @@ The dashboard uses the same health checks as `--health-check`, including
 uv run lematt --prod --report                              # in the terminal
 uv run lematt --prod --report --report-output report.json  # JSON
 uv run lematt --prod --report --report-output report.md    # Markdown
+uv run lematt --prod --report --report-format json | jq .  # JSON to stdout
 ```
 
-A report has the health summary, certificate inventory, renewal schedule
-and configuration summary (the terminal version also lists action
-groups). Files are written as JSON for `.json`, Markdown for `.md` and
-`.markdown`, or per `--report-format` for other names; without
-`--report-output` the report is printed.
+A report has the health summary, certificate inventory (with paths),
+renewal schedule, configuration summary (mode, ACME directory, key,
+certificate and challenge directories, key settings) and deployment
+action groups.
+
+The format is `--report-format` if given, else taken from the
+`--report-output` extension: `.json` is JSON, `.md`/`.markdown` is
+Markdown, and anything else is the terminal report as plain text.
+Without `--report-output`, the report goes to stdout.
 
 The renewal schedule sorts certificates by days until lematt renews them:
 `immediate` (overdue), `soon` (within 7 days), `scheduled` (within 14),

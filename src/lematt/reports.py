@@ -5,20 +5,88 @@ certificate inventory, renewal schedules, configuration summaries,
 and operational status.
 """
 
+import io
 import json
+import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from rich.console import Group
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from .config import LemattConfig
+from .config import DomainActions, DomainConfig, KeyType, LemattConfig
 from .display import DisplayConfig, StatusStyle, console
 from .health import SystemHealth
+
+REPORT_FORMATS = ("console", "json", "markdown")
+_FORMAT_BY_SUFFIX = {".json": "json", ".md": "markdown", ".markdown": "markdown"}
+
+# Every certificate line is issued with both key types
+DEFAULT_KEY_TYPES = (KeyType.RSA, KeyType.EC)
+
+
+def report_format(output_path: Path | None, requested: str | None = None) -> str:
+    """The report format: as requested, else from the file extension, else console."""
+    if requested:
+        return requested
+    if output_path is not None:
+        return _FORMAT_BY_SUFFIX.get(output_path.suffix.lower(), "console")
+    return "console"
+
+
+def config_summary(
+    config: LemattConfig,
+    domains: Sequence[DomainConfig],
+    actions: DomainActions | None,
+    key_types: Sequence[KeyType],
+) -> dict[str, Any]:
+    """The settings a report shows, shared by every output format."""
+    return {
+        "test_mode": config.is_test,
+        "acme_directory": config.acme_directory_url,
+        "config_directory": str(config.config_base),
+        "cert_directory": str(config.mode_dir("cert")),
+        "key_directory": str(config.mode_dir("key")),
+        "challenge_directory": str(config.challenge_dir),
+        "account_key": str(config.account_key),
+        "profile": config.profile,
+        "rsa_key_bits": config.rsa_key_bits,
+        "ec_curve": config.ec_curve,
+        "key_types": [str(kt) for kt in key_types],
+        "domain_count": len(domains),
+        "san_count": sum(len(d.san_domains) for d in domains),
+        "action_groups": list(actions.all_action_names()) if actions else [],
+    }
+
+
+# Labels for config_summary() keys in the console and Markdown reports
+_SUMMARY_LABELS = {
+    "test_mode": "Test mode",
+    "acme_directory": "ACME directory",
+    "config_directory": "Config directory",
+    "cert_directory": "Certificate directory",
+    "key_directory": "Key directory",
+    "challenge_directory": "Challenge directory",
+    "account_key": "Account key",
+    "profile": "Default profile",
+    "rsa_key_bits": "RSA key bits",
+    "ec_curve": "EC curve",
+}
+
+
+def _summary_value(value: Any) -> str:
+    return "CA default" if value is None else str(value)
+
+
+def _group_scope(name: str) -> str:
+    """Which names an action group without a domains list applies to."""
+    return "every renewed certificate" if name == "every" else "unlisted names"
 
 
 @dataclass
@@ -71,19 +139,23 @@ class ReportGenerator:
     def __init__(
         self,
         config: LemattConfig,
+        domains: Sequence[DomainConfig],
         health: SystemHealth | None = None,
         report_config: ReportConfig | None = None,
+        key_types: Sequence[KeyType] = DEFAULT_KEY_TYPES,
     ):
         self.config = config
+        self.domains = domains
         self.health = health
         self.report_config = report_config or ReportConfig()
+        self.key_types = key_types
 
     def build_inventory(self) -> list[CertificateInventoryItem]:
         """Build certificate inventory from config and health data."""
         inventory = []
 
-        for domain_config in self.config.domains:  # type: ignore[attr-defined]
-            for key_type in self.config.key_types:  # type: ignore[attr-defined]
+        for domain_config in self.domains:
+            for key_type in self.key_types:
                 # Find health data for this cert
                 health_item = None
                 if self.health:
@@ -343,36 +415,31 @@ class ReportRenderer:
 
         return table
 
-    def render_config_summary(self, config: LemattConfig) -> Panel:
-        """Render configuration summary."""
+    def render_config_summary(
+        self, summary: dict[str, Any], actions: DomainActions | None = None
+    ) -> Panel:
+        """Render configuration summary (see config_summary())."""
         tree = Tree("[bold]Configuration Summary[/bold]")
 
         # Global settings
         global_node = tree.add("[cyan]Global Settings[/cyan]")
-        global_node.add(f"Config base: [dim]{config.config_base}[/dim]")
-        global_node.add(
-            f"Cert directory: [dim]{getattr(config, 'cert_directory', 'N/A')}[/dim]"
-        )
-        global_node.add(f"Webroot: [dim]{getattr(config, 'webroot_path', 'N/A')}[/dim]")
-        global_node.add(
-            f"Test mode: [dim]{getattr(config, 'test_mode', config.is_test)}[/dim]"
-        )
+        for key, label in _SUMMARY_LABELS.items():
+            global_node.add(f"{label}: [dim]{_summary_value(summary[key])}[/dim]")
 
         # Key types
         keys_node = tree.add("[cyan]Key Types[/cyan]")
-        for kt in config.key_types:  # type: ignore[attr-defined]
+        for kt in summary["key_types"]:
             keys_node.add(f"[green]✓[/green] {kt}")
 
         # Domains summary
         domains_node = tree.add("[cyan]Domains[/cyan]")
-        domains_node.add(f"Total: {len(config.domains)}")  # type: ignore[attr-defined]
-        san_total = sum(len(d.san_domains) for d in config.domains)  # type: ignore[attr-defined,misc]
-        domains_node.add(f"Total SANs: {san_total}")
+        domains_node.add(f"Total: {summary['domain_count']}")
+        domains_node.add(f"Total SANs: {summary['san_count']}")
 
         # Actions summary
-        if hasattr(config, "actions") and config.actions:  # type: ignore[attr-defined]
+        if actions:
             actions_node = tree.add("[cyan]Actions[/cyan]")
-            for name, action in config.actions.all_action_names().items():  # type: ignore[attr-defined]
+            for name, action in actions.all_action_names().items():
                 action_text = Text()
                 action_text.append(f"{name}: ", style="bold")
                 parts = []
@@ -426,7 +493,7 @@ class ReportRenderer:
             border_style=style,
         )
 
-    def render_actions_summary(self, config: LemattConfig) -> Table:
+    def render_actions_summary(self, actions: DomainActions) -> Table:
         """Render actions configuration summary."""
         table = Table(
             title="Deployment Actions",
@@ -442,12 +509,11 @@ class ReportRenderer:
         table.add_column("Upload Keys", justify="center")
         table.add_column("Update", justify="center")
 
-        if not hasattr(config, "actions") or not config.actions:  # type: ignore[attr-defined]
-            return table
-
-        for name, action in config.actions.all_action_names().items():  # type: ignore[attr-defined]
+        for name, action in actions.all_action_names().items():
             domains_str = (
-                ", ".join(action.domains[:3]) if action.domains else "[dim]all[/dim]"
+                ", ".join(action.domains[:3])
+                if action.domains
+                else f"[dim]{_group_scope(name)}[/dim]"
             )
             if len(action.domains) > 3:
                 domains_str += f" (+{len(action.domains) - 3})"
@@ -475,19 +541,28 @@ class Report:
     def __init__(
         self,
         config: LemattConfig,
+        domains: Sequence[DomainConfig],
+        actions: DomainActions | None = None,
         health: SystemHealth | None = None,
         report_config: ReportConfig | None = None,
+        key_types: Sequence[KeyType] = DEFAULT_KEY_TYPES,
     ):
         self.config = config
+        self.domains = domains
+        self.actions = actions
         self.health = health
         self.report_config = report_config or ReportConfig()
-        self.generator = ReportGenerator(config, health, self.report_config)
+        self.key_types = key_types
+        self.generator = ReportGenerator(
+            config, domains, health, self.report_config, key_types
+        )
         self.renderer = ReportRenderer()
+
+    def config_summary(self) -> dict[str, Any]:
+        return config_summary(self.config, self.domains, self.actions, self.key_types)
 
     def render_full_report(self) -> Group:
         """Render the complete report."""
-        from typing import Any
-
         sections: list[Any] = []
 
         # Header with TEST MODE warning if applicable
@@ -541,22 +616,39 @@ class Report:
 
         # Configuration summary
         if self.report_config.include_config:
-            sections.append(self.renderer.render_config_summary(self.config))
+            sections.append(
+                self.renderer.render_config_summary(self.config_summary(), self.actions)
+            )
             sections.append(Text())
 
         # Actions summary
-        if (
-            self.report_config.include_actions
-            and hasattr(self.config, "actions")
-            and self.config.actions
-        ):  # type: ignore[attr-defined]
-            sections.append(self.renderer.render_actions_summary(self.config))
+        if self.report_config.include_actions and self.actions:
+            sections.append(self.renderer.render_actions_summary(self.actions))
 
         return Group(*sections)
 
     def print_report(self) -> None:
         """Print the full report to the console."""
         console.print(self.render_full_report())
+
+    def to_text(self, width: int = 120) -> str:
+        """The console report as plain text (no colors), e.g. for a file."""
+        buffer = io.StringIO()
+        Console(file=buffer, width=width, color_system=None).print(
+            self.render_full_report()
+        )
+        return buffer.getvalue()
+
+    def render(self, format: str) -> str:
+        """The report as text in one of REPORT_FORMATS."""
+        renderers = {
+            "console": self.to_text,
+            "json": self.to_json,
+            "markdown": self.to_markdown,
+        }
+        if format not in renderers:
+            raise ValueError(f"Unknown report format: {format!r}")
+        return renderers[format]()
 
     def to_dict(self) -> dict:
         """Export report as a dictionary."""
@@ -595,26 +687,12 @@ class Report:
                 }
                 for item in schedule
             ],
-            "config": {
-                "cert_directory": str(getattr(self.config, "cert_directory", "N/A")),
-                "webroot_path": str(getattr(self.config, "webroot_path", "N/A")),
-                "test_mode": getattr(self.config, "test_mode", self.config.is_test),
-                "key_types": [str(kt) for kt in self.config.key_types],  # type: ignore[attr-defined]
-                "domain_count": len(self.config.domains),  # type: ignore[attr-defined]
-                "action_groups": list(self.config.actions.all_action_names().keys())  # type: ignore[attr-defined]
-                if hasattr(self.config, "actions") and self.config.actions  # type: ignore[attr-defined]
-                else [],
-            },
+            "config": self.config_summary(),
         }
 
     def to_json(self, indent: int = 2) -> str:
         """Export report as JSON string."""
         return json.dumps(self.to_dict(), indent=indent)
-
-    def save_json(self, path: Path) -> None:
-        """Save report as JSON file."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_json())
 
     def to_markdown(self) -> str:
         """Export report as Markdown."""
@@ -651,8 +729,8 @@ class Report:
             [
                 "## Certificate Inventory",
                 "",
-                "| Domain | Type | Status | Expires | Days | SANs |",
-                "|--------|------|--------|---------|------|------|",
+                "| Domain | Type | Status | Expires | Days | SANs | Certificate |",
+                "|--------|------|--------|---------|------|------|-------------|",
             ]
         )
 
@@ -666,7 +744,7 @@ class Report:
             sans = str(len(item.san_domains)) if item.san_domains else "0"
             lines.append(
                 f"| {item.domain} | {item.key_type.upper()} | {item.status} | "
-                f"{expires} | {days} | {sans} |"
+                f"{expires} | {days} | {sans} | `{item.cert_path}` |"
             )
 
         lines.append("")
@@ -706,70 +784,73 @@ class Report:
         lines.append("")
 
         # Configuration
+        summary = self.config_summary()
+        lines.extend(["## Configuration", ""])
+        lines.extend(
+            f"- {label}: `{_summary_value(summary[key])}`"
+            for key, label in _SUMMARY_LABELS.items()
+        )
         lines.extend(
             [
-                "## Configuration",
-                "",
-                f"- Certificate Directory: `{getattr(self.config, 'cert_directory', 'N/A')}`",
-                f"- Webroot Path: `{getattr(self.config, 'webroot_path', 'N/A')}`",
-                f"- Test Mode: {getattr(self.config, 'test_mode', self.config.is_test)}",
-                f"- Key Types: {', '.join(str(kt) for kt in self.config.key_types)}",  # type: ignore[attr-defined]
-                f"- Domains: {len(self.config.domains)}",  # type: ignore[attr-defined]
+                f"- Key types: {', '.join(summary['key_types'])}",
+                f"- Certificates: {summary['domain_count']} "
+                f"({summary['san_count']} additional names)",
                 "",
             ]
         )
 
+        # Deployment actions
+        if self.actions:
+            lines.extend(
+                [
+                    "## Deployment Actions",
+                    "",
+                    "| Group | Domains | Prepare | Upload Certs | Upload Keys | Update |",
+                    "|-------|---------|---------|--------------|-------------|--------|",
+                ]
+            )
+            for name, action in self.actions.all_action_names().items():
+                lines.append(
+                    f"| {name} | {', '.join(action.domains) or _group_scope(name)} | "
+                    f"{len(action.prepare_commands)} | "
+                    f"{len(action.upload_certs_commands)} | "
+                    f"{len(action.upload_keys_commands)} | "
+                    f"{len(action.update_commands)} |"
+                )
+            lines.append("")
+
         return "\n".join(lines)
-
-    def save_markdown(self, path: Path) -> None:
-        """Save report as Markdown file."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_markdown())
-
-
-def generate_quick_report(
-    config: LemattConfig, health: SystemHealth | None = None
-) -> None:
-    """Generate and print a quick summary report.
-
-    Args:
-        config: lematt configuration
-        health: Optional health check results
-    """
-    report = Report(
-        config,
-        health,
-        ReportConfig(
-            title="Quick Status Report",
-            include_config=False,
-            include_actions=False,
-            show_paths=False,
-        ),
-    )
-    report.print_report()
 
 
 def generate_full_report(
     config: LemattConfig,
+    domains: Sequence[DomainConfig],
+    actions: DomainActions | None = None,
     health: SystemHealth | None = None,
     output_path: Path | None = None,
-    format: str = "console",
+    format: str | None = None,
 ) -> None:
-    """Generate a full report.
+    """Print the full report, or write it to ``output_path``.
 
     Args:
         config: lematt configuration
+        domains: Configured certificate lines
+        actions: Configured action groups
         health: Optional health check results
-        output_path: Optional path to save report
-        format: Output format (console, json, markdown)
+        output_path: File to write instead of printing
+        format: One of REPORT_FORMATS (default: from output_path's
+            extension, else console)
     """
-    report = Report(config, health)
+    report = Report(config, domains, actions, health)
+    output_format = report_format(output_path, format)
 
-    if format == "json" and output_path:
-        report.save_json(output_path)
-        console.print(f"[green]✓[/green] Report saved to {output_path}")
-    elif format == "markdown" and output_path:
-        report.save_markdown(output_path)
-        console.print(f"[green]✓[/green] Report saved to {output_path}")
-    else:
-        report.print_report()
+    if output_path is None:
+        if output_format == "console":
+            report.print_report()
+        else:
+            sys.stdout.write(report.render(output_format) + "\n")
+        return
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(report.render(output_format))
+    console.print(f"[green]✓[/green] {output_format} report saved to {output_path}")

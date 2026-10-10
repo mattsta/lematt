@@ -89,7 +89,6 @@ from lematt.reports import (
     ReportGenerator,
     ReportRenderer,
     generate_full_report,
-    generate_quick_report,
 )
 from lematt.systemd import (
     PRESETS as SYSTEMD_PRESETS,
@@ -168,7 +167,6 @@ __all__ = [
     "create_renewal_progress",
     "generate_full_report",
     "generate_private_key",
-    "generate_quick_report",
     "get_certificate_info",
     "get_quick_help",
     # Logging
