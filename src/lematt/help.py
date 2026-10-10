@@ -569,6 +569,48 @@ After each renewal run lematt sends one notification per kind:
         see_also=["systemd", "monitoring", "health"],
         keywords=["notify", "alert", "slack", "email", "webhook"],
     ),
+    "challenges": HelpTopic(
+        name="challenges",
+        title="Validation Methods and Wildcards",
+        category=HelpCategory.CONFIGURATION,
+        summary="http-01 today; wildcards, dns-01 and dns-persist-01",
+        content="""
+# Validation Methods and Wildcards
+
+lematt validates names with **http-01**: `challengeDropDir` must be served
+at `http://<name>/.well-known/acme-challenge/` for every name, from
+anywhere (use a `prepare` action to forward challenges from other hosts).
+
+## Wildcards
+
+Let's Encrypt issues wildcard certificates only after DNS validation, which
+lematt doesn't implement. Today, either list the names on a certificate
+line (up to 100), or use a DNS-capable ACME client for the wildcard names.
+If you published `--caa-records`, give that client an `issuewild` CAA
+record for its own account and `dns-01`.
+
+## Coming later
+
+- **dns-01** (available at Let's Encrypt): fresh TXT record per validation
+- **dns-persist-01** (announced, not live as of 2026-10): one standing
+  `_validation-persist.<name>` TXT record naming lematt's ACME account
+
+See docs/challenges.md for the design notes and when to implement each.
+""",
+        examples=[
+            "example.com www api mail       # names instead of *.example.com",
+            "curl -v http://example.com/.well-known/acme-challenge/test",
+        ],
+        see_also=["domains", "actions", "troubleshooting"],
+        keywords=[
+            "wildcard",
+            "dns",
+            "dns-01",
+            "dns-persist-01",
+            "http-01",
+            "challenge",
+        ],
+    ),
     # Troubleshooting
     "troubleshooting": HelpTopic(
         name="troubleshooting",

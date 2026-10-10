@@ -6,7 +6,9 @@ A high-performance, type-safe certificate management system for automated Let's 
 
 - **Parallel Processing**: Process hundreds of certificates concurrently with configurable worker pools
 - **Dual Key Support**: Generate both RSA and EC (ECDSA) certificates for each domain
-- **SAN/SNI/UCC Support**: Up to 100 domain names per certificate
+- **SAN/SNI/UCC Support**: Up to 100 domain names per certificate (http-01
+  validation; see [docs/challenges.md](docs/challenges.md) for wildcards and the
+  DNS challenge roadmap)
 - **Workflow Automation**: Pre-request prepare actions and post-renewal deployment triggers
 - **Multiple Output Formats**: Human-readable tables or JSON for monitoring integration
 - **Modern Python**: Type-safe dataclasses, Python 3.14+, keys and CSRs via the `cryptography` library
@@ -182,6 +184,15 @@ State lives in `<config dir>/<prod|test>/state/`:
 Deleting the state directory is safe: lematt rebuilds it from the
 certificates on disk (at the cost of re-checking ARI and forgetting
 failure history).
+
+## Validation and Wildcards
+
+lematt validates names with http-01, so it can't issue wildcard
+certificates (Let's Encrypt requires DNS validation for those). List the
+names on a certificate line instead (up to 100), or use a DNS-capable
+client for wildcard names. [docs/challenges.md](docs/challenges.md)
+covers the options, the CAA interplay, and how dns-01 and the upcoming
+dns-persist-01 would be added to lematt.
 
 ## Revoking Certificates
 

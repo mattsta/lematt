@@ -57,6 +57,8 @@ include = [
     "src/lematt",
     "conf",
     "contrib",
+    "docs",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE",
 ]
