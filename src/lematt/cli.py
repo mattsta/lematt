@@ -48,7 +48,7 @@ examples:
   uv run lematt --test                        renew against staging
   uv run lematt --prod --status               when each certificate renews
   uv run lematt --prod --cron                 scheduled production run
-  uv run lematt --test --help-topic           list detailed help topics
+  uv run lematt --help-topic                  list detailed help topics
 """
 
 
@@ -145,18 +145,21 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Mode selection (required, mutually exclusive)
-    mode_group = parser.add_mutually_exclusive_group(required=True)
+    # Mode selection (mutually exclusive; main() requires one unless the
+    # command doesn't depend on it, see MODELESS_COMMANDS)
+    mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--prod",
         dest="is_test",
         action="store_false",
+        default=None,
         help="Use LE production endpoint (rate limited: 5 certs per exact name set per week)",
     )
     mode_group.add_argument(
         "--test",
         dest="is_test",
         action="store_true",
+        default=None,
         help="Use LE staging endpoint (keys/certs will have 'test' suffix)",
     )
 
@@ -994,10 +997,15 @@ def run_renewal(
 type Predicate = Callable[[argparse.Namespace], object]
 
 # Checked in order; the first match runs
-STANDALONE_COMMANDS: list[tuple[Predicate, Callable[[argparse.Namespace], int]]] = [
+# Commands that don't depend on --prod/--test (or on a loaded configuration)
+MODELESS_COMMANDS: list[tuple[Predicate, Callable[[argparse.Namespace], int]]] = [
     (lambda a: a.init_toml, cmd_init_toml),
     (lambda a: a.help_topic is not None, cmd_help_topic),
     (lambda a: a.help_search, cmd_help_search),
+]
+
+# Commands that need the mode but not a loaded configuration
+STANDALONE_COMMANDS: list[tuple[Predicate, Callable[[argparse.Namespace], int]]] = [
     (
         lambda a: (
             a.print_systemd_units
@@ -1016,7 +1024,7 @@ CONFIGURED_COMMANDS: list[tuple[Predicate, Callable[[Context], int], bool]] = [
     (lambda a: a.health_check, cmd_health, True),
     (lambda a: a.dashboard, cmd_dashboard, True),
     (lambda a: a.report, cmd_report, True),
-    (lambda a: a.test_notification, cmd_test_notification, False),
+    (lambda a: a.test_notification, cmd_test_notification, True),
     (lambda a: a.revoke, cmd_revoke, False),
     (lambda a: a.show_status, cmd_status, True),
     (lambda a: a.caa_records, cmd_caa_records, True),
@@ -1025,7 +1033,16 @@ CONFIGURED_COMMANDS: list[tuple[Predicate, Callable[[Context], int], bool]] = [
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run lematt; returns the process exit code."""
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    for selected, modeless in MODELESS_COMMANDS:
+        if selected(args):
+            setup_logging(verbose=args.verbose)
+            return modeless(args)
+
+    if args.is_test is None:
+        parser.error("one of the arguments --prod --test is required")
     setup_logging(verbose=args.verbose, cron=args.is_cron, test_mode=args.is_test)
 
     for selected, standalone in STANDALONE_COMMANDS:

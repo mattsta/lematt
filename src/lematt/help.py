@@ -821,7 +821,7 @@ class HelpRenderer:
         if not results:
             return Panel(
                 f"[dim]No results found for '[/dim]{query}[dim]'[/dim]\n\n"
-                "Try `uv run lematt --test --help-topic` to list all topics.",
+                "Try `uv run lematt --help-topic` to list all topics.",
                 title="[bold]Search Results[/bold]",
                 border_style="yellow",
             )
@@ -856,7 +856,7 @@ def print_help(topic_name: str | None = None) -> None:
         console.print(renderer.render_category_tree(help_system))
         console.print()
         console.print(
-            "[dim]Use 'uv run lematt --test --help-topic <topic>' for detailed help[/dim]"
+            "[dim]Use 'uv run lematt --help-topic <topic>' for detailed help[/dim]"
         )
 
 

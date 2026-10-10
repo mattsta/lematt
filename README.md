@@ -61,7 +61,7 @@ Write a configuration: either edit the INI files in `conf/` (the default
 
 ```bash
 # Writes conf/lematt.toml (next to --config); edit it, then pass it as --config
-uv run lematt --test --init-toml
+uv run lematt --init-toml
 ```
 
 Check it, then issue staging certificates:
@@ -270,7 +270,7 @@ update = [
 email_to = "admin@example.com"
 ```
 
-`uv run lematt --test --init-toml` writes a commented starting point.
+`uv run lematt --init-toml` writes a commented starting point.
 
 #### `[config]`
 
@@ -457,7 +457,8 @@ command for `authorized_keys` that limits an upload key to `scp`/`rsync`.
 
 ## Commands
 
-Every command needs `--test` (staging) or `--prod` (production).
+Every command except `--help-topic`, `--help-search` and `--init-toml` needs
+`--test` (staging) or `--prod` (production).
 
 ### Renewing
 
@@ -503,7 +504,7 @@ api.example.com (EC)      N/A          N/A        now (missing)         ⚠️  
 ### Configuration Helpers
 
 ```bash
-uv run lematt --test --init-toml              # write an example lematt.toml next to --config
+uv run lematt --init-toml                     # write an example lematt.toml next to --config
 uv run lematt --test --config /etc/lematt/lematt.toml --validate-config
 uv run lematt --test -v                       # debug output
 ```
@@ -511,7 +512,7 @@ uv run lematt --test -v                       # debug output
 ### All Options
 
 ```
-usage: lematt [-h] (--prod | --test) [--cron] [--parallel N] [--config PATH]
+usage: lematt [-h] [--prod | --test] [--cron] [--parallel N] [--config PATH]
               [-v] [--dry-run] [--status] [--json] [--list-domains]
               [--validate-config] [--domain NAME] [--force-renew]
               [--init-toml] [--caa-records] [--print-systemd-units]
@@ -950,9 +951,9 @@ The renewal schedule sorts certificates by days until lematt renews them:
 ### Help Topics
 
 ```bash
-uv run lematt --test --help-topic              # list topics
-uv run lematt --test --help-topic run
-uv run lematt --test --help-search wildcard
+uv run lematt --help-topic              # list topics
+uv run lematt --help-topic run
+uv run lematt --help-search wildcard
 ```
 
 Topics: `run`, `revoke`, `status`, `health`, `dashboard`, `config`,

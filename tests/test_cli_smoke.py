@@ -110,3 +110,30 @@ def test_domain_filter_selects_one_certificate(monkeypatch, conf, capsys):
     assert {c["domain"] for c in status["certificates"]} == {"example.com"}
 
     assert run(monkeypatch, conf, "--status", "--domain", "nope.example") == 1
+
+
+def test_help_and_init_toml_need_no_mode(conf):
+    assert main(["--help-topic"]) == 0
+    assert main(["--help-topic", "run"]) == 0
+    assert main(["--help-search", "wildcard"]) == 0
+
+    assert main(["--init-toml", "--config", str(conf / "lematt.conf")]) == 0
+    assert "[config]" in (conf / "lematt.toml").read_text()
+
+
+@pytest.mark.parametrize("command", [[], ["--status"], ["--print-systemd-units"]])
+def test_other_commands_require_a_mode(command, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(command)
+
+    assert exit_info.value.code == 2
+    assert "one of the arguments --prod --test is required" in capsys.readouterr().err
+
+
+def test_test_notification_needs_no_challenge_directory(monkeypatch, conf):
+    (conf / "challenges").rmdir()
+    (conf / "lematt.toml").write_text(
+        '[notifications]\ncustom_command = "true"\njournald_enabled = false\n'
+    )
+
+    assert run(monkeypatch, conf, "--test-notification") == 0
