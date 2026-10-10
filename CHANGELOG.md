@@ -92,6 +92,11 @@ lematt now keeps state between runs.
 
 - Production systemd units failed every run (missing `--prod`).
 - Regenerated keys could keep trailing bytes of the old key (no truncation).
+- A failed renewal with `alwaysGenerateNewKeys` left a new key next to the old
+  certificate, and a regenerated key could be submitted with its old CSR. New
+  key material is now installed only together with its certificate.
+- The http-01 self-check rejected https redirects to an expired or self-signed
+  certificate, which the CA accepts.
 - Health checks compared UTC expiry times with local time.
 - Parallel runs never passed prepare-action locks to worker processes on
   Python 3.14, and their progress updates were dropped.
