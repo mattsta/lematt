@@ -75,7 +75,7 @@ class PrepareActionRunner:
             logger.debug(f"[PREPARE] Acquiring lock for domain: {domain}")
             self._domain_lock.acquire()  # type: ignore[union-attr]
             logger.info(f"[PREPARE] Lock acquired for domain: {domain}")
-        except (RuntimeError, AttributeError):
+        except RuntimeError, AttributeError:
             # Lock manager not initialized (sequential mode)
             self._domain_lock = None
             self._locked_domain = None
@@ -149,7 +149,7 @@ class PrepareActionRunner:
                             logger.debug(
                                 f"[PREPARE] Force killed process group for PID {proc.pid}"
                             )
-                    except (OSError, ProcessLookupError):
+                    except OSError, ProcessLookupError:
                         # Process group doesn't exist, try killing just the process
                         proc.terminate()
                         try:
@@ -163,7 +163,7 @@ class PrepareActionRunner:
                             logger.debug(
                                 f"[PREPARE] Force killed process PID {proc.pid}"
                             )
-            except (OSError, ProcessLookupError):
+            except OSError, ProcessLookupError:
                 pass  # Process may have already exited
 
         if killed_count > 0:

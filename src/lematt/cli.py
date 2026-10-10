@@ -483,7 +483,7 @@ def main() -> int:
             return 1
         from lematt.help import print_help
 
-        print_help(args.help_topic if args.help_topic else None)
+        print_help(args.help_topic or None)
         return 0
 
     # Handle --help-search: search help topics

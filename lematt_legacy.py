@@ -362,7 +362,7 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
         # Extract subject CN
         try:
             cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-        except (IndexError, AttributeError):
+        except IndexError, AttributeError:
             cn = None
 
         # Extract SAN domains
@@ -380,7 +380,7 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
         # Extract issuer
         try:
             issuer = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-        except (IndexError, AttributeError):
+        except IndexError, AttributeError:
             issuer = None
 
         return CertificateInfo(
@@ -1092,7 +1092,7 @@ def unprepareDomainForUpdate(prepared):
         # Reset terminal semantics...
         try:
             run("stty sane")
-        except (subprocess.CalledProcessError, OSError):
+        except subprocess.CalledProcessError, OSError:
             # This may not work if run detached from a shell
             # (like via cron). Ignore stty failures.
             pass

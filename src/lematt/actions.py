@@ -209,7 +209,7 @@ class ActionRunner:
                             logger.debug(
                                 f"[PREPARE] Force killed process group for PID {proc.pid}"
                             )
-                    except (OSError, ProcessLookupError):
+                    except OSError, ProcessLookupError:
                         # No process group, kill just the process
                         proc.terminate()
                         try:
@@ -223,7 +223,7 @@ class ActionRunner:
                             logger.debug(
                                 f"[PREPARE] Force killed process PID {proc.pid}"
                             )
-            except (OSError, ProcessLookupError):
+            except OSError, ProcessLookupError:
                 pass  # Process already exited
 
         if killed_count > 0:

@@ -397,7 +397,7 @@ class FilterDialogScreen(Screen):
             try:
                 index = list(event.pressed.parent.children).index(event.pressed)
                 self.selected_filter = filters[index]
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

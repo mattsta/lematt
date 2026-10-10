@@ -95,7 +95,7 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
         # Extract subject CN
         try:
             cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-        except (IndexError, AttributeError):
+        except IndexError, AttributeError:
             cn = None
 
         # Extract SAN domains
@@ -113,7 +113,7 @@ def parse_certificate_native(cert_path: str) -> CertificateInfo:
         # Extract issuer
         try:
             issuer = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-        except (IndexError, AttributeError):
+        except IndexError, AttributeError:
             issuer = None
 
         # Handle both old and new cryptography library API
