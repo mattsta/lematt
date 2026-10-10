@@ -8,7 +8,7 @@ Features:
 - Parallel certificate provisioning with configurable concurrency
 - SAN/SNI/UCC support for up to 100 domains per certificate
 - Flexible deployment actions (rsync, ssh, service reloads)
-- Native cryptography support (optional) for ~5x performance
+- Keys, CSRs and certificate parsing via the cryptography library
 - Test mode with LE staging endpoint
 - Robust concurrent processing with error isolation and rate limiting
 """
@@ -30,7 +30,6 @@ from lematt.config import (
 )
 from lematt.config_loader import ConfigLoader, create_example_toml
 from lematt.crypto import (
-    HAS_CRYPTOGRAPHY,
     create_csr,
     generate_private_key,
     get_certificate_info,
@@ -113,7 +112,6 @@ from lematt.systemd import (
 
 __all__ = [
     # Crypto
-    "HAS_CRYPTOGRAPHY",
     "HELP_TOPICS",
     "SYSTEMD_PRESETS",
     "ActionConfig",

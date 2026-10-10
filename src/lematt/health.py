@@ -7,12 +7,10 @@ This module provides comprehensive health checking capabilities including:
 - Status reporting for monitoring systems
 """
 
-import contextlib
 import datetime
 import json
 import socket
 import ssl
-import subprocess
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -20,7 +18,13 @@ from pathlib import Path
 from loguru import logger
 
 from .config import DomainConfig, LemattConfig
+from .crypto import get_certificate_info
 from .notifications import NotificationEvent, NotificationManager
+
+
+def _utcnow() -> datetime.datetime:
+    """Current time as naive UTC, matching parsed certificate dates."""
+    return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
 
 
 class HealthStatus(Enum):
@@ -122,7 +126,8 @@ class HealthChecker:
         key_type: str,
     ) -> CertificateHealth:
         """Check health of a certificate file."""
-        if not cert_path.exists():
+        info = get_certificate_info(cert_path)
+        if not info.exists:
             return CertificateHealth(
                 domain=domain,
                 key_type=key_type,
@@ -130,110 +135,48 @@ class HealthChecker:
                 message="Certificate file not found",
                 cert_path=str(cert_path),
             )
-
-        # Parse certificate using openssl
-        try:
-            result = subprocess.run(
-                [
-                    "openssl",
-                    "x509",
-                    "-in",
-                    str(cert_path),
-                    "-noout",
-                    "-dates",
-                    "-issuer",
-                    "-subject",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-            if result.returncode != 0:
-                return CertificateHealth(
-                    domain=domain,
-                    key_type=key_type,
-                    status=HealthStatus.UNKNOWN,
-                    message=f"Failed to parse certificate: {result.stderr}",
-                    cert_path=str(cert_path),
-                )
-
-            # Parse output
-            output = result.stdout
-            not_after = None
-            issuer = None
-
-            for line in output.split("\n"):
-                if line.startswith("notAfter="):
-                    date_str = line.replace("notAfter=", "").strip()
-                    # Parse OpenSSL date format: "Jan  1 00:00:00 2024 GMT"
-                    try:
-                        not_after = datetime.datetime.strptime(
-                            date_str, "%b %d %H:%M:%S %Y %Z"
-                        )
-                    except ValueError:
-                        # Try alternative format (double space for single digit day)
-                        with contextlib.suppress(ValueError):
-                            not_after = datetime.datetime.strptime(
-                                date_str, "%b  %d %H:%M:%S %Y %Z"
-                            )
-                elif line.startswith("issuer="):
-                    issuer = line.replace("issuer=", "").strip()
-
-            if not not_after:
-                return CertificateHealth(
-                    domain=domain,
-                    key_type=key_type,
-                    status=HealthStatus.UNKNOWN,
-                    message="Could not parse certificate expiry date",
-                    cert_path=str(cert_path),
-                )
-
-            # Calculate days until expiry
-            now = datetime.datetime.now()
-            days_until_expiry = (not_after - now).days
-
-            # Determine status
-            if days_until_expiry < 0:
-                status = HealthStatus.CRITICAL
-                message = f"Certificate EXPIRED {abs(days_until_expiry)} days ago"
-            elif days_until_expiry < self.critical_days:
-                status = HealthStatus.CRITICAL
-                message = f"Certificate expires in {days_until_expiry} days (CRITICAL)"
-            elif days_until_expiry < self.warning_days:
-                status = HealthStatus.WARNING
-                message = f"Certificate expires in {days_until_expiry} days"
-            else:
-                status = HealthStatus.HEALTHY
-                message = f"Certificate valid for {days_until_expiry} days"
-
-            return CertificateHealth(
-                domain=domain,
-                key_type=key_type,
-                status=status,
-                message=message,
-                cert_path=str(cert_path),
-                days_until_expiry=days_until_expiry,
-                not_after=not_after,
-                issuer=issuer,
-            )
-
-        except subprocess.TimeoutExpired:
+        if info.parse_error or info.not_after is None:
             return CertificateHealth(
                 domain=domain,
                 key_type=key_type,
                 status=HealthStatus.UNKNOWN,
-                message="Certificate check timed out",
+                message=f"Failed to parse certificate: {info.parse_error}",
                 cert_path=str(cert_path),
             )
-        except Exception as e:
-            return CertificateHealth(
-                domain=domain,
-                key_type=key_type,
-                status=HealthStatus.UNKNOWN,
-                message=f"Error checking certificate: {e}",
-                cert_path=str(cert_path),
+
+        days_until_expiry = (info.not_after - _utcnow()).days
+        status, message = self._classify(days_until_expiry, "Certificate")
+        return CertificateHealth(
+            domain=domain,
+            key_type=key_type,
+            status=status,
+            message=message,
+            cert_path=str(cert_path),
+            days_until_expiry=days_until_expiry,
+            not_after=info.not_after,
+            issuer=info.issuer_dn,
+        )
+
+    def _classify(
+        self, days_until_expiry: int, subject: str
+    ) -> tuple[HealthStatus, str]:
+        """Map days until expiry to a status and message."""
+        if days_until_expiry < 0:
+            return (
+                HealthStatus.CRITICAL,
+                f"{subject} EXPIRED {abs(days_until_expiry)} days ago",
             )
+        if days_until_expiry < self.critical_days:
+            return (
+                HealthStatus.CRITICAL,
+                f"{subject} expires in {days_until_expiry} days (CRITICAL)",
+            )
+        if days_until_expiry < self.warning_days:
+            return (
+                HealthStatus.WARNING,
+                f"{subject} expires in {days_until_expiry} days",
+            )
+        return HealthStatus.HEALTHY, f"{subject} valid for {days_until_expiry} days"
 
     def check_live_certificate(
         self,
@@ -281,25 +224,8 @@ class HealthChecker:
                         issuer = value
                         break
 
-            # Calculate days
-            now = datetime.datetime.now()
-            days_until_expiry = (not_after - now).days
-
-            # Determine status
-            if days_until_expiry < 0:
-                status = HealthStatus.CRITICAL
-                message = f"Live certificate EXPIRED {abs(days_until_expiry)} days ago"
-            elif days_until_expiry < self.critical_days:
-                status = HealthStatus.CRITICAL
-                message = (
-                    f"Live certificate expires in {days_until_expiry} days (CRITICAL)"
-                )
-            elif days_until_expiry < self.warning_days:
-                status = HealthStatus.WARNING
-                message = f"Live certificate expires in {days_until_expiry} days"
-            else:
-                status = HealthStatus.HEALTHY
-                message = f"Live certificate valid for {days_until_expiry} days"
+            days_until_expiry = (not_after - _utcnow()).days
+            status, message = self._classify(days_until_expiry, "Live certificate")
 
             return CertificateHealth(
                 domain=domain,

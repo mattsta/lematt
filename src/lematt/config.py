@@ -72,6 +72,7 @@ class CertificateInfo:
     subject_cn: str | None = None
     san_domains: list[str] = field(default_factory=list)
     issuer: str | None = None
+    issuer_dn: str | None = None
     serial_number: str | None = None
     parse_error: str | None = None
 

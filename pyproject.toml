@@ -24,19 +24,17 @@ classifiers = [
 
 # Required dependencies (tomllib is stdlib in Python 3.11+)
 dependencies = [
+    "cryptography>=46", # Keys, CSRs, certificate parsing
     "loguru>=0.7.3", # Modern structured logging
     "rich>=15.0", # Beautiful terminal output, tables, progress bars
     "textual>=8.2", # Interactive TUI framework
 ]
 
 [project.optional-dependencies]
-# Optional: native crypto for ~5x performance improvement
-crypto = ["cryptography>=46"]
-
-# Full installation with all features
-full = [
-    "cryptography>=46",
-]
+# Former extras; cryptography is now always installed. Kept so existing
+# `lematt[crypto]` / `lematt[full]` installs keep working.
+crypto = []
+full = []
 
 [project.scripts]
 lematt = "lematt.cli:main"

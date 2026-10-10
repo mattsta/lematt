@@ -25,7 +25,12 @@ from lematt.config import (
     KeyType,
     LemattConfig,
 )
-from lematt.crypto import HAS_CRYPTOGRAPHY, get_certificate_info
+from lematt.crypto import (
+    create_csr,
+    generate_private_key,
+    get_certificate_info,
+    write_file_atomically,
+)
 from lematt.log import EVENT
 
 if TYPE_CHECKING:
@@ -309,8 +314,7 @@ class CertificateManager:
                     directory_url=directory,
                     domain_context=domain_context,
                 )
-                with open(output_path, "w") as f:
-                    f.write(signed_cert)
+                write_file_atomically(output_path, signed_cert.encode())
                 return True
             except Exception as e:
                 last_error = e
@@ -338,7 +342,7 @@ class CertificateManager:
         output_path: str,
         key_type: KeyType,
     ) -> bool:
-        """Generate a private key.
+        """Generate a private key (written atomically with 0600 permissions).
 
         Args:
             output_path: Path to write the key.
@@ -347,26 +351,19 @@ class CertificateManager:
         Returns:
             True if successful, False otherwise.
         """
+        if key_type == KeyType.EC:
+            self.log(f"Generating EC {self.config.ec_curve} key...", str(key_type))
+        else:
+            self.log(f"Generating RSA {self.config.rsa_key_bits} key...", str(key_type))
         try:
-            if key_type == KeyType.EC:
-                self.log(f"Generating EC {self.config.ec_curve} key...", str(key_type))
-                cmd = ["openssl", "ecparam", "-genkey", "-name", self.config.ec_curve]
-            else:
-                self.log(
-                    f"Generating RSA {self.config.rsa_key_bits} key...", str(key_type)
-                )
-                cmd = ["openssl", "genrsa", str(self.config.rsa_key_bits)]
-
-            result = subprocess.run(cmd, capture_output=True, check=True)
-
-            # Write with secure permissions
-            with os.fdopen(
-                os.open(output_path, os.O_WRONLY | os.O_CREAT, 0o600), "wb"
-            ) as f:
-                f.write(result.stdout)
-
+            pem = generate_private_key(
+                key_type,
+                rsa_bits=self.config.rsa_key_bits,
+                ec_curve=self.config.ec_curve,
+            )
+            write_file_atomically(output_path, pem, mode=0o600)
             return True
-        except subprocess.CalledProcessError as e:
+        except (ValueError, OSError) as e:
             self.log(f"Key generation failed: {e}", "ERROR", update=True)
             return False
 
@@ -387,40 +384,10 @@ class CertificateManager:
             True if successful, False otherwise.
         """
         self.log("Generating CSR...", "CSR")
-
-        primary_domain = domains[0]
-        use_san = len(domains) > 1
-
-        san_config = ""
-        cmd_san = ""
-        if use_san:
-            alt_names = [f"DNS:{domain}" for domain in domains]
-            san_config = ",".join(alt_names)
-            cmd_san = "-reqexts SAN"
-
-        stdin_config = f"""[req]
-distinguished_name=req_dn
-
-[req_dn]
-
-[SAN]
-subjectAltName={san_config}"""
-
         try:
-            cmd = (
-                f"openssl req -new -sha256 -key {private_key_path} "
-                f"-subj /CN={primary_domain} {cmd_san} -config -"
-            )
-            result = subprocess.run(
-                cmd.split(),
-                input=stdin_config.encode(),
-                capture_output=True,
-                check=True,
-            )
-            with open(output_path, "wb") as f:
-                f.write(result.stdout)
+            write_file_atomically(output_path, create_csr(private_key_path, domains))
             return True
-        except subprocess.CalledProcessError as e:
+        except (ValueError, OSError) as e:
             self.log(f"CSR generation failed: {e}", "ERROR", update=True)
             return False
 
@@ -725,18 +692,11 @@ subjectAltName={san_config}"""
                     "expired": sum(1 for s in status_data if s["status"] == "expired"),
                     "missing": sum(1 for s in status_data if s["status"] == "missing"),
                 },
-                "using_native_crypto": HAS_CRYPTOGRAPHY,
             }
 
         # Human-readable output
         logger.info("=" * 80)
         logger.info("CERTIFICATE STATUS REPORT")
-        if HAS_CRYPTOGRAPHY:
-            logger.info("(Using native cryptography library)")
-        else:
-            logger.info(
-                "(Using openssl subprocess - install 'cryptography' for better performance)"
-            )
         logger.info("=" * 80)
         logger.info(f"{'Domain':<40} {'Expires':<20} {'Days Left':<12} {'Status'}")
         logger.info("-" * 80)

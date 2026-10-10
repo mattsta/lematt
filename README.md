@@ -9,7 +9,7 @@ A high-performance, type-safe certificate management system for automated Let's 
 - **SAN/SNI/UCC Support**: Up to 100 domain names per certificate
 - **Workflow Automation**: Pre-request prepare actions and post-renewal deployment triggers
 - **Multiple Output Formats**: Human-readable tables or JSON for monitoring integration
-- **Modern Python**: Type-safe dataclasses, Python 3.14+, native cryptography support
+- **Modern Python**: Type-safe dataclasses, Python 3.14+, keys and CSRs via the `cryptography` library
 - **TOML Configuration**: Modern config format with native list support (INI still supported)
 - **Test Mode**: Isolated staging environment to validate configuration safely
 - **Systemd Integration**: One-command timer installation with security hardening
@@ -34,10 +34,6 @@ uv sync
 
 # Or install with pip
 pip install -e .
-
-# Optional: Install native crypto for ~5x performance
-uv sync --extra crypto
-# or: pip install -e ".[crypto]"
 ```
 
 ### Generate Example Configuration
@@ -623,8 +619,7 @@ lematt --test --status --json
     "critical": 0,
     "expired": 0,
     "missing": 1
-  },
-  "using_native_crypto": true
+  }
 }
 ```
 
@@ -693,21 +688,6 @@ lematt --test --list-domains --json
 ---
 
 ## Performance
-
-### Native Cryptography
-
-Install the optional `cryptography` package for ~5x faster certificate parsing:
-
-```bash
-uv sync --extra crypto
-# or: pip install cryptography
-```
-
-Check if native crypto is active:
-
-```bash
-lematt --test --status  # Shows "(Using native cryptography library)"
-```
 
 ### Parallel Processing
 
