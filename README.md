@@ -1365,7 +1365,6 @@ actions.load_actions()
 executor = CertificateExecutor(
     config=config,
     max_workers=5,
-    rate_limit=10.0,
 )
 
 summary = executor.process_batch(

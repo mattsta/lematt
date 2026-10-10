@@ -789,7 +789,6 @@ def main() -> int:
     executor = CertificateExecutor(
         config=lematt_config,
         max_workers=lematt_config.concurrency,
-        rate_limit=10.0,  # Conservative: 10 requests/second
         progress_callback=progress_callback,
     )
 
@@ -803,7 +802,7 @@ def main() -> int:
         # Gracefully handle interrupt - still run hooks for successful renewals
         logger.warning("Interrupted by user - processing successful renewals...")
         interrupted = True
-        summary = executor._summary
+        summary = executor.summary
 
     exit_code = finish_report(summary, interrupted=interrupted)
 

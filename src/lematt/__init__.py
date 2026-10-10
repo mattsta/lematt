@@ -26,7 +26,6 @@ from lematt.config import (
     KeyType,
     LemattConfig,
     RenewalSummary,
-    WorkerResult,
 )
 from lematt.config_loader import ConfigLoader, create_example_toml
 from lematt.crypto import (
@@ -64,7 +63,6 @@ from lematt.display import (
 from lematt.executor import (
     BatchProgress,
     CertificateExecutor,
-    RateLimiter,
     TaskProgress,
     TaskStatus,
 )
@@ -153,7 +151,6 @@ __all__ = [
     "NotificationEvent",
     "NotificationManager",
     "PrometheusMetrics",
-    "RateLimiter",
     "RenewalScheduleItem",
     "RenewalSummary",
     # Reports
@@ -168,7 +165,6 @@ __all__ = [
     "SystemdInstaller",
     "TaskProgress",
     "TaskStatus",
-    "WorkerResult",
     # Version
     "__version__",
     # Display components

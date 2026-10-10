@@ -169,56 +169,6 @@ class DomainActions:
 
 
 @dataclass
-class WorkerResult:
-    """Result from a certificate worker process.
-
-    This is a serializable dataclass used for IPC between the main process
-    and worker processes. It replaces the arbitrary dict pattern.
-    """
-
-    domain: str
-    key_type: str
-    success: bool
-    renewed: bool
-    cert_path: str | None = None
-    key_path: str | None = None
-    error_message: str | None = None
-    all_domains: list[str] = field(default_factory=list)
-    exception: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        """Convert to dictionary for process serialization."""
-        return {
-            "domain": self.domain,
-            "key_type": self.key_type,
-            "success": self.success,
-            "renewed": self.renewed,
-            "cert_path": self.cert_path,
-            "key_path": self.key_path,
-            "error_message": self.error_message,
-            "all_domains": self.all_domains,
-            "exception": self.exception,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, object]) -> WorkerResult:
-        """Create WorkerResult from dictionary."""
-        return cls(
-            domain=str(data["domain"]),
-            key_type=str(data["key_type"]),
-            success=bool(data["success"]),
-            renewed=bool(data["renewed"]),
-            cert_path=data.get("cert_path") if data.get("cert_path") else None,  # type: ignore[arg-type]
-            key_path=data.get("key_path") if data.get("key_path") else None,  # type: ignore[arg-type]
-            error_message=data.get("error_message")
-            if data.get("error_message")
-            else None,  # type: ignore[arg-type]
-            all_domains=list(data.get("all_domains", [])),  # type: ignore[arg-type]
-            exception=data.get("exception") if data.get("exception") else None,  # type: ignore[arg-type]
-        )
-
-
-@dataclass
 class LemattConfig:
     """Global configuration for lematt."""
 

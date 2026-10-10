@@ -11,9 +11,10 @@ import pathlib
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -51,43 +52,48 @@ class PrepareActionRunner:
 
     config: LemattConfig
     _processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
-    _domain_lock: object = field(default=None, repr=False)  # multiprocessing.Lock
-    _locked_domain: str | None = field(default=None, repr=False)
+    _held_locks: list[tuple[str, Any]] = field(default_factory=list, repr=False)
+
+    def lock_domains(self, domains: Iterable[str]) -> None:
+        """Wait for other parallel workers preparing any of these names.
+
+        Prevents two workers from running the same name's prepare actions
+        (e.g. a challenge forwarder bound to one port) at the same time.
+        Locks are taken in sorted order so workers sharing names can't
+        deadlock. No-op outside parallel workers.
+        """
+        from lematt.executor import _get_domain_lock
+
+        for domain in sorted(set(domains)):
+            try:
+                lock = _get_domain_lock(domain)
+            except RuntimeError:
+                return  # sequential run: nothing to coordinate with
+            logger.debug(f"[PREPARE] Acquiring lock for domain: {domain}")
+            lock.acquire()
+            self._held_locks.append((domain, lock))
+
+    def release_locks(self) -> None:
+        while self._held_locks:
+            domain, lock = self._held_locks.pop()
+            try:
+                lock.release()
+                logger.debug(f"[PREPARE] Released lock for domain: {domain}")
+            except Exception as e:
+                logger.warning(f"[PREPARE] Error releasing lock for {domain}: {e}")
 
     def prepare_domain(
         self, domain: str, domain_actions: DomainActions
     ) -> list[subprocess.Popen]:
-        """Run prepare actions for a domain before cert request.
-
-        CRITICAL: This method acquires a domain-level lock to ensure only ONE
-        prepare action runs per domain at a time. This prevents port conflicts
-        when processing multiple key types (RSA + EC) in parallel.
+        """Start the prepare actions for a domain before its cert request.
 
         Args:
-            domain: The domain to prepare.
+            domain: The domain to prepare (replaces DOMAIN in commands).
             domain_actions: DomainActions container with action configs.
 
         Returns:
-            List of running Popen processes that must be killed after cert request.
+            Running processes that must be killed after the cert request.
         """
-        # Acquire domain lock to serialize prepare actions per domain
-        # This prevents "port already in use" errors when running parallel renewals
-        from lematt.executor import _get_domain_lock
-
-        try:
-            self._domain_lock = _get_domain_lock(domain)
-            self._locked_domain = domain
-            logger.debug(f"[PREPARE] Acquiring lock for domain: {domain}")
-            self._domain_lock.acquire()  # type: ignore[union-attr]
-            logger.info(f"[PREPARE] Lock acquired for domain: {domain}")
-        except RuntimeError, AttributeError:
-            # Lock manager not initialized (sequential mode)
-            self._domain_lock = None
-            self._locked_domain = None
-            logger.debug(
-                f"[PREPARE] No lock needed for domain: {domain} (sequential mode)"
-            )
-
         processes: list[subprocess.Popen] = []
 
         # Get actions for this domain (or default)
@@ -117,7 +123,7 @@ class PrepareActionRunner:
         return processes
 
     def cleanup(self, processes: list[subprocess.Popen] | None = None) -> None:
-        """Kill prepare processes after certificate request completes.
+        """Kill prepare processes and release domain locks.
 
         Args:
             processes: Specific processes to kill. If None, kills all tracked processes.
@@ -128,6 +134,7 @@ class PrepareActionRunner:
         procs = processes if processes is not None else self._processes
 
         if not procs:
+            self.release_locks()
             return
 
         logger.debug(f"[PREPARE] Cleaning up {len(procs)} prepare process(es)")
@@ -174,17 +181,7 @@ class PrepareActionRunner:
         if killed_count > 0:
             logger.info(f"[PREPARE] Cleaned up {killed_count} prepare process(es)")
 
-        # Release domain lock if we acquired it
-        if self._domain_lock is not None:
-            try:
-                self._domain_lock.release()  # type: ignore[union-attr,attr-defined]
-                logger.info(
-                    f"[PREPARE] Released lock for domain: {self._locked_domain}"
-                )
-                self._domain_lock = None
-                self._locked_domain = None
-            except Exception as e:
-                logger.warning(f"[PREPARE] Error releasing domain lock: {e}")
+        self.release_locks()
 
         # Reset terminal if any prepare commands were run
         with contextlib.suppress(subprocess.CalledProcessError, OSError):
@@ -445,6 +442,7 @@ class CertificateManager:
         prepared_processes: list[subprocess.Popen] = []
 
         try:
+            prepare_runner.lock_domains(domain_config.all_domains)
             for domain in domain_config.all_domains:
                 procs = prepare_runner.prepare_domain(domain, domain_actions)
                 prepared_processes.extend(procs)
