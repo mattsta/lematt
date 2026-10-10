@@ -35,8 +35,10 @@ lematt now keeps state between runs.
   `--prod`/`--test`, `--cron`, the installing Python, no sandboxing, no
   bash notifier. Re-run `--install-systemd`, or use `--print-systemd-units`.
 - **`--health-check` exits 3 for unknown** (a certificate that doesn't
-  parse, a live check that timed out, or a configuration that doesn't
-  load), following the monitoring-plugin convention. It used to exit 0 or 1.
+  parse, a live check that timed out, a configuration that doesn't load, or
+  one with no certificates), following the monitoring-plugin convention. It
+  used to exit 0 or 1. Every command also logs which configuration it
+  loaded and warns when it has no certificate lines.
 - **`--validate-config` checks what a run needs**: it fails when the
   challenge directory is missing or the account key doesn't load.
 - **`custom_command` is split like a shell command line**, so it can carry
