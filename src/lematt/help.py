@@ -86,6 +86,7 @@ under `test/`). Always validate changes with `--test` first.
 
 - 0: Success (nothing failed)
 - 1: A certificate failed, or the configuration is invalid
+- 75: Another renewal run is still in progress (nothing was done)
 - 130: Interrupted (after-issue actions still run for renewed certs)
 """,
         examples=[

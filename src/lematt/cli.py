@@ -28,6 +28,10 @@ from lematt.config_loader import ConfigError, ConfigLoader
 from lematt.executor import CertificateExecutor, create_progress_printer
 from lematt.log import EVENT, setup_logging
 from lematt.manager import CertificateManager
+from lematt.state import RunLockedError, StateStore
+
+# Exit code when another renewal run holds the lock (EX_TEMPFAIL)
+EXIT_RUN_LOCKED = 75
 
 
 @dataclass
@@ -731,6 +735,19 @@ def cmd_renew(ctx: Context) -> int:
         logger.error("Create with: openssl genrsa 4096 > key.pem")
         return 1
 
+    if config.is_dry_run:
+        return run_renewal(ctx, domains)
+    try:
+        with StateStore(Path(config.state_dir)).run_lock():
+            return run_renewal(ctx, domains)
+    except RunLockedError as e:
+        logger.warning(f"Not starting: {e}")
+        return EXIT_RUN_LOCKED
+
+
+def run_renewal(ctx: Context, domains: list[DomainConfig]) -> int:
+    """Process ``domains``, then deploy what was renewed; return the exit code."""
+    args, config = ctx.args, ctx.config
     CertificateManager(config).ensure_directories()
     action_runner = ActionRunner(config, actions=ctx.actions)
     executor = CertificateExecutor(

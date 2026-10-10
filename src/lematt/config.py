@@ -226,6 +226,18 @@ class LemattConfig:
         base = "test/" if self.is_test else "prod/"
         return base + subdir
 
+    @property
+    def state_dir(self) -> str:
+        """Directory holding lematt's persistent state for this mode."""
+        return f"{self.config_base}/{self.get_subdir('state')}"
+
+    def key_tag(self, key_type: KeyType) -> str:
+        return self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
+
+    def cert_id(self, domain_config: DomainConfig, key_type: KeyType) -> str:
+        """Stable identifier for one certificate (its name set and key)."""
+        return f"{domain_config.filename_base}.{self.key_tag(key_type)}"
+
     def get_cert_path(self, domain_config: DomainConfig, key_type: KeyType) -> str:
         """Generate the certificate file path."""
         tag = self.rsa_tag if key_type == KeyType.RSA else self.curve_tag
