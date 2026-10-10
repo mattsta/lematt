@@ -22,8 +22,10 @@ Status as of 2026-10-10.
   validates from several network perspectives with unpublished IPs.
 - `challengeDropDir` must be served at `/.well-known/acme-challenge/` for
   every name, directly or through redirects. Hosts without that webroot
-  use a `prepare` action (for example `ssh … contrib/leforward.py`) to
-  redirect challenges to the host that has it.
+  use a `prepare` action (for example
+  `ssh -tt <host> uv run leforward.py --baseurl http://<webroot host>`,
+  with `contrib/leforward.py`) to redirect challenges to the host that
+  has it.
 - lematt fetches each token itself before asking the CA to validate, so
   misconfigurations fail without spending Let's Encrypt's failed-validation
   limit (5 per name per hour).
@@ -43,10 +45,10 @@ so lematt can't issue them. Options, in order of preference:
 2. **Use a DNS-capable ACME client for the wildcard names only** (for
    example lego, acme.sh, or certbot with a DNS plugin) and keep lematt for
    everything else. Deploy its output with that client's own hooks.
-3. **Mind your CAA records.** If you published lematt's
-   `--caa-records` (`issue "letsencrypt.org; accounturi=…;
-validationmethods=http-01"`), the other client also needs permission.
-   Add an `issuewild` record for its account and `dns-01`, for example:
+3. **Mind your CAA records.** If you published lematt's `--caa-records`
+   (`issue "letsencrypt.org; accounturi=…; validationmethods=http-01"`),
+   the other client also needs permission. Add an `issuewild` record for
+   its account and `dns-01`, for example:
 
    ```
    example.com. IN CAA 0 issuewild "letsencrypt.org; accounturi=<other client's account URL>; validationmethods=dns-01"
@@ -66,12 +68,14 @@ Design notes for adding it:
     (`_acme-challenge.<name>`) and `VALUE` (base64url of SHA-256 of the
     key authorization)
   - `dnsCleanup`: remove it again
-    Wildcard names (`*.example.com`) would be allowed only on dns-01 lines,
-    and filenames would need the `*` mapped to something safe.
+
+  Wildcard names (`*.example.com`) would be allowed only on dns-01 lines,
+  and filenames would need the `*` mapped to something safe.
+
 - **Code.** A `lematt.acme.dns01.Dns01Solver` implementing the existing
-  `ChallengeSolver` protocol (`present`/`cleanup`). `AcmeClient.
-complete_authorizations()` currently always picks http-01; it would pick
-  the challenge matching the solver's type instead.
+  `ChallengeSolver` protocol (`present`/`cleanup`).
+  `AcmeClient.complete_authorizations()` currently always picks http-01;
+  it would pick the challenge matching the solver's type instead.
 - **Propagation.** After `dnsPresent`, poll the zone's authoritative name
   servers until every one serves the value (with a timeout) before asking
   the CA to validate. Remove stale values so responses stay small.
@@ -132,7 +136,7 @@ line up:
   community.letsencrypt.org) that dns-persist-01 is in production
 - `dns-persist-01` listed on https://letsencrypt.org/docs/challenge-types/
 - Production authorizations offering a `dns-persist-01` challenge (staging
-  first: `lematt --test` against the staging directory)
+  first: `uv run lematt --test` against the staging directory)
 - The draft (draft-ietf-acme-dns-persist) becoming an RFC, or lego/certbot
   releases with support
 

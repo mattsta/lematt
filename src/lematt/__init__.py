@@ -10,7 +10,7 @@ Features:
 - Flexible deployment actions (rsync, ssh, service reloads)
 - Keys, CSRs and certificate parsing via the cryptography library
 - Test mode with LE staging endpoint
-- Robust concurrent processing with error isolation and rate limiting
+- Renewal timing from the CA (ARI), with backoff and error isolation
 """
 
 __version__ = "3.0.0"

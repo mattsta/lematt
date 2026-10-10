@@ -1,7 +1,7 @@
 """Entry point for running lematt as a module.
 
-Allows running lematt with: python -m lematt
-or with uv: uv run lematt
+Run lematt with `uv run lematt`; the systemd unit runs `python -m lematt`
+with the project environment's Python.
 """
 
 import sys

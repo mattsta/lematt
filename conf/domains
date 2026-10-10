@@ -3,8 +3,8 @@
 # The first domain on a line is the primary name in the certificate.
 # If multiple domains are on one line, they are added as extra names.
 
-# Always verify your config by running `lematt --test` first.
-# Run `lematt --test` after every change to verify your options still work.
+# Always verify your config by running `uv run lematt --test` first.
+# Run `uv run lematt --test` after every change to verify your options still work.
 # Production rate limits are low (5 certificates per exact set of names
 # per 7 days, and each line issues RSA + EC); repeatedly testing against
 # --prod can lock a domain out for days.
@@ -14,3 +14,7 @@
 # mail.example.com
 # dev.example.com dev2.example.com dev3.example.com
 # corp.example.com internal hr chat git web pikachu
+# fast.example.com profile=shortlived
+#
+# Comments must be on their own line; anything after a name is read as
+# another name.

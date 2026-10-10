@@ -558,7 +558,7 @@ ec_curve = "prime256v1"
 always_generate_new_keys = false
 
 # Domain configurations
-# Each [[domains]] entry creates one certificate
+# Each [[domains]] entry creates an RSA and an EC certificate
 
 [[domains]]
 primary = "example.com"
@@ -602,7 +602,8 @@ update = [
 # Configure alerting for renewal failures and expiry warnings
 
 [notifications]
-# Email notifications (requires sendmail or SMTP configured)
+# Email notifications (via /usr/sbin/sendmail; email_use_sendmail = false
+# sends through email_smtp_host/email_smtp_port instead)
 # email_to = "admin@example.com"
 # email_from = "lematt@example.com"
 
@@ -610,7 +611,8 @@ update = [
 # webhook_url = "https://hooks.slack.com/services/XXX/YYY/ZZZ"
 # webhook_format = "slack"  # slack, discord, or generic
 
-# PagerDuty integration (only alerts on failures)
+# PagerDuty integration (pages only for failures unless
+# pagerduty_only_failure = false)
 # pagerduty_key = "your-integration-key"
 
 # Ntfy push notifications (https://ntfy.sh)
