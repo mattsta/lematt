@@ -1,6 +1,16 @@
 """Notifications from renewal runs and their configuration."""
 
-from lematt.notifications import NotificationConfig, run_notifications
+from dataclasses import dataclass, field
+
+from lematt.notifications import (
+    CommandBackend,
+    NotificationBackend,
+    NotificationConfig,
+    NotificationEvent,
+    NotificationManager,
+    PagerDutyBackend,
+    run_notifications,
+)
 
 
 def test_run_history_becomes_one_event_per_kind():
@@ -69,3 +79,45 @@ def test_revocations_are_reported():
 
     assert (event.event_type, event.title) == ("warning", "Certificates Revoked")
     assert event.details == {"a.rsa2048": "serial 0a (keyCompromise)"}
+
+
+@dataclass
+class RecordingBackend(NotificationBackend):
+    sent: list[NotificationEvent] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return "recording"
+
+    def send(self, event: NotificationEvent) -> bool:
+        self.sent.append(event)
+        return True
+
+
+def test_backends_that_skip_an_event_are_not_reported_as_sent():
+    recorder = RecordingBackend()
+    manager = NotificationManager()
+    manager.add_backend(PagerDutyBackend(routing_key="key"))  # failures only
+    manager.add_backend(recorder)
+    event = NotificationEvent(event_type="info", title="Test", message="hello")
+
+    assert manager.notify(event) == {"recording": True}
+    assert recorder.sent == [event]
+    assert PagerDutyBackend(routing_key="key", only_on_failure=False).accepts(event)
+
+
+def test_custom_command_may_include_arguments(tmp_path):
+    script = tmp_path / "notify.sh"
+    out = tmp_path / "args.txt"
+    script.write_text(f'printf "%s\\n" "$@" > "{out}"\n')
+    event = NotificationEvent(event_type="failure", title="Renewal failed", message="x")
+
+    assert CommandBackend(f"sh {script} --channel 'ops alerts'").send(event)
+
+    assert out.read_text().splitlines()[:5] == [
+        "--channel",
+        "ops alerts",
+        "failure",
+        "Renewal failed",
+        "x",
+    ]

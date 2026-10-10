@@ -5,6 +5,7 @@ multiple channels: email, webhooks, PagerDuty, ntfy, and custom commands.
 """
 
 import json
+import shlex
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -78,6 +79,10 @@ class NotificationBackend(ABC):
     def name(self) -> str:
         """Return the backend name."""
         ...
+
+    def accepts(self, event: NotificationEvent) -> bool:
+        """Whether this backend sends events like this one."""
+        return True
 
 
 @dataclass
@@ -283,12 +288,12 @@ class PagerDutyBackend(NotificationBackend):
     def name(self) -> str:
         return "pagerduty"
 
+    def accepts(self, event: NotificationEvent) -> bool:
+        """Only page for failures unless configured otherwise."""
+        return event.is_failure or not self.only_on_failure
+
     def send(self, event: NotificationEvent) -> bool:
         """Send PagerDuty alert."""
-        if self.only_on_failure and not event.is_failure:
-            logger.debug("Skipping PagerDuty for non-failure event")
-            return True
-
         payload = {
             "routing_key": self.routing_key,
             "event_action": "trigger",
@@ -362,7 +367,9 @@ class NtfyBackend(NotificationBackend):
 class CommandBackend(NotificationBackend):
     """Custom command execution backend."""
 
-    command: str  # Command receives: event_type title message hostname timestamp
+    # Split like a shell command line (quoting works; no pipes or variables);
+    # receives: event_type title message hostname timestamp
+    command: str
 
     @property
     def name(self) -> str:
@@ -373,7 +380,7 @@ class CommandBackend(NotificationBackend):
         try:
             proc = subprocess.run(
                 [
-                    self.command,
+                    *shlex.split(self.command),
                     event.event_type,
                     event.title,
                     event.message,
@@ -456,13 +463,20 @@ class NotificationManager:
         return True
 
     def notify(self, event: NotificationEvent) -> dict[str, bool]:
-        """Send notification to all backends. Returns success status per backend."""
+        """Send to every backend that accepts the event.
+
+        Returns success per backend that was tried; backends that don't take
+        this kind of event (see NotificationBackend.accepts) are left out.
+        """
         if not self.should_notify(event):
             logger.debug(f"Skipping notification for event type: {event.event_type}")
             return {}
 
         results: dict[str, bool] = {}
         for backend in self.backends:
+            if not backend.accepts(event):
+                logger.debug(f"{backend.name} skips {event.event_type} events")
+                continue
             try:
                 success = backend.send(event)
                 results[backend.name] = success
@@ -475,62 +489,6 @@ class NotificationManager:
                 results[backend.name] = False
 
         return results
-
-    def notify_renewal_success(
-        self,
-        domains: list[str],
-        renewed_count: int,
-        skipped_count: int,
-    ) -> dict[str, bool]:
-        """Send notification for successful renewal run."""
-        event = NotificationEvent(
-            event_type="success",
-            title="Certificate Renewal Complete",
-            message=f"Renewed {renewed_count} certificates, {skipped_count} already valid",
-            details={
-                "renewed": renewed_count,
-                "skipped": skipped_count,
-                "total_domains": len(domains),
-            },
-        )
-        return self.notify(event)
-
-    def notify_renewal_failure(
-        self,
-        failed_domains: list[str],
-        error_messages: list[str],
-    ) -> dict[str, bool]:
-        """Send notification for failed renewals."""
-        event = NotificationEvent(
-            event_type="failure",
-            title="Certificate Renewal Failed",
-            message=f"Failed to renew {len(failed_domains)} certificates",
-            details={
-                "failed_domains": ", ".join(
-                    failed_domains[:10]
-                ),  # Limit for readability
-                "errors": "; ".join(error_messages[:5]),
-                "failed_count": len(failed_domains),
-            },
-        )
-        return self.notify(event)
-
-    def notify_expiry_warning(
-        self,
-        domain: str,
-        days_remaining: int,
-    ) -> dict[str, bool]:
-        """Send notification for upcoming certificate expiry."""
-        event = NotificationEvent(
-            event_type="warning",
-            title="Certificate Expiring Soon",
-            message=f"Certificate for {domain} expires in {days_remaining} days",
-            details={
-                "domain": domain,
-                "days_remaining": days_remaining,
-            },
-        )
-        return self.notify(event)
 
 
 @dataclass

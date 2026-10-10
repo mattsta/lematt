@@ -850,6 +850,9 @@ notify_on_success = true
 uv run lematt --test --test-notification     # send a test event to every backend
 ```
 
+The test reports each backend as sent (✓), failed (✗), or skipped: with
+`pagerduty_only_failure`, PagerDuty doesn't take test events.
+
 | Key                      | Default            | Description                                     |
 | ------------------------ | ------------------ | ----------------------------------------------- |
 | `email_to`               | unset              | Enables email                                   |
@@ -864,7 +867,7 @@ uv run lematt --test --test-notification     # send a test event to every backen
 | `ntfy_topic`             | unset              | Enables ntfy                                    |
 | `ntfy_server`            | "https://ntfy.sh"  | ntfy server                                     |
 | `ntfy_token`             | unset              | ntfy access token                               |
-| `custom_command`         | unset              | Executable run per event (no shell)             |
+| `custom_command`         | unset              | Command run per event (see below)               |
 | `journald_enabled`       | true               | Log events via `logger` to syslog/journald      |
 | `journald_identifier`    | "lematt"           | Syslog identifier                               |
 | `notify_on_failure`      | true               | Send failure events                             |
@@ -888,15 +891,22 @@ results. `--dry-run` sends nothing.
 
 ### Custom Command
 
-`custom_command` is executed directly (not through a shell, so no
-arguments in the setting) with five arguments, and must finish within 60
-seconds:
+`custom_command` is split into words like a shell command line (quotes
+work; pipes, redirects and variables don't) and run without a shell. Five
+arguments are appended: event type, title, message, hostname and
+timestamp. It must exit 0 within 60 seconds.
+
+```toml
+custom_command = "/usr/local/bin/lematt-notify --channel 'ops alerts'"
+```
 
 ```bash
 #!/bin/sh
-# /usr/local/bin/lematt-notify: event_type title message hostname timestamp
+# /usr/local/bin/lematt-notify --channel NAME event_type title message hostname timestamp
+channel="$2"; shift 2
 curl -fsS -X POST https://alerts.example.com/hook \
-  --data-urlencode "event=$1" --data-urlencode "title=$2" --data-urlencode "message=$3"
+  --data-urlencode "channel=$channel" --data-urlencode "event=$1" \
+  --data-urlencode "title=$2" --data-urlencode "message=$3"
 ```
 
 ---

@@ -714,11 +714,15 @@ def cmd_test_notification(ctx: Context) -> int:
         message="This is a test notification from lematt",
         details={"test": True, "config_path": str(ctx.loader.config_base)},
     )
-    manager.notify_on_success = True  # deliver even though it's not a failure
     results = manager.notify(event)
 
-    for backend_name, success in results.items():
-        logger.info(f"  {'✓' if success else '✗'} {backend_name}")
+    for backend in manager.backends:
+        if backend.name in results:
+            logger.info(f"  {'✓' if results[backend.name] else '✗'} {backend.name}")
+        else:
+            logger.info(
+                f"  - {backend.name}: skipped (it doesn't send {event.event_type} events)"
+            )
     failures = sum(1 for ok in results.values() if not ok)
     if failures:
         logger.warning(f"Some notifications failed: {failures}/{len(results)}")
