@@ -13,7 +13,7 @@ Features:
 - Robust concurrent processing with error isolation and rate limiting
 """
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __author__ = "Matt"
 
 from lematt.actions import ActionRunner

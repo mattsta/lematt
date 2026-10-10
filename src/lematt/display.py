@@ -21,6 +21,8 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
+from lematt import __version__
+
 # Shared console instance
 console = Console()
 
@@ -355,7 +357,7 @@ def create_action_table(actions: dict, title: str = "Workflow Actions") -> Table
     return table
 
 
-def print_banner(version: str = "2.0.0", test_mode: bool = False) -> None:
+def print_banner(version: str = __version__, test_mode: bool = False) -> None:
     """Print the lematt banner.
 
     Args:

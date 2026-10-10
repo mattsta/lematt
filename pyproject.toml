@@ -1,6 +1,6 @@
 [project]
 name = "lematt"
-version = "2.0.0"
+version = "3.0.0"
 description = "Matt's Let's Encrypt Automation - Certificate management with parallel processing"
 readme = "README.md"
 license = { text = "Apache-2.0" }

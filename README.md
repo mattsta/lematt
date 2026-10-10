@@ -98,21 +98,25 @@ lematt --prod --domain example.com
 
 ```
 lematt/
-├── cli.py            # Command-line interface and argument parsing
+├── cli.py            # Command-line interface: one handler per command
 ├── config.py         # Configuration dataclasses (LemattConfig, DomainConfig, etc.)
-├── config_loader.py  # Unified INI/TOML configuration loading
-├── manager.py        # CertificateManager - core certificate operations
-├── executor.py       # CertificateExecutor - parallel processing with error isolation
-├── actions.py        # ActionRunner - pre/post certificate workflow execution
-├── crypto.py         # Key generation, CSR creation, certificate parsing
-├── log.py            # Loguru-based structured logging
-├── systemd.py        # Systemd timer/service generation and installation
-├── health.py         # Certificate health checking and monitoring
-├── notifications.py  # Multi-channel alerting (email, Slack, PagerDuty, etc.)
-├── display.py        # Rich terminal display components (tables, progress, trees)
-├── dashboard.py      # Interactive live-updating dashboard
+├── config_loader.py  # Unified INI/TOML configuration loading and validation
+├── manager.py        # CertificateManager: plan, issue, record each certificate
+├── renewal.py        # Renewal policy: ARI window, lifetime fallback, backoff
+├── state.py          # Persistent state: account, per-certificate, history, run lock
+├── session.py        # Shared ACME session (transport + account) per certificate line
+├── acme/             # ACME client: JWS, transport, orders, http-01, ARI (RFC 9773)
+├── executor.py       # CertificateExecutor: sequential/parallel runs, error isolation
+├── actions.py        # ActionRunner: prepare/upload/update workflow per action group
+├── crypto.py         # Keys, CSRs, certificate parsing (cryptography library)
+├── log.py            # Loguru-based logging (EVENT level for --cron)
+├── systemd.py        # systemd service/timer units (print or install)
+├── health.py         # Lifetime- and renewal-aware health checks, Prometheus metrics
+├── notifications.py  # Alerting backends (email, webhooks, PagerDuty, ntfy, ...)
+├── display.py        # Rich terminal display components
+├── tui/              # Interactive --dashboard (Textual)
 ├── help.py           # Contextual help system with searchable topics
-└── reports.py        # Comprehensive report generation (JSON, Markdown, console)
+└── reports.py        # Inventory and renewal-schedule reports (console, JSON, Markdown)
 ```
 
 ### Processing Flow
@@ -124,15 +128,19 @@ lematt/
         ↓
 3. Load Domain List
         ↓
-4. For each domain + key type (RSA, EC):
-   a. Check if renewal needed
-   b. Run prepare actions (start temp servers, open ports)
-   c. Generate key (if needed)
-   d. Generate CSR
-   e. Request certificate from Let's Encrypt
-   f. Cleanup prepare actions
+4. Take the run lock (an overlapping run exits with code 75)
         ↓
-5. Run post-renewal actions (upload, reload services)
+5. For each domain line (RSA + EC certificates, optionally in parallel):
+   a. Refresh the CA's renewal window (ARI) when due for a check
+   b. Decide per certificate: ARI window / lifetime fallback / backoff
+   c. If any is due: start prepare actions (e.g. challenge forwarders)
+   d. Generate key and CSR (if needed), order with `replaces`, validate
+      http-01, download the chain, record the result in state
+   e. Stop prepare actions
+        ↓
+6. Run post-renewal actions per action group (upload, reload services)
+        ↓
+7. Send notifications for the run (failures, early renewals, renewals)
 ```
 
 ---
